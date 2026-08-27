@@ -155,3 +155,9 @@ export interface Portfolio {
   };
   holdings: Holding[];
 }
+
+export interface PortfolioPoint {
+  date: string;
+  investedLkr: number;
+  valueLkr: number;
+}

@@ -77,6 +77,8 @@ npm run build && npm start
 | GET    | `/api/purchases`           | JWT  | List the user's purchases                 |
 | DELETE | `/api/purchases/:id`       | JWT  | Delete a purchase                         |
 | GET    | `/api/portfolio`           | JWT  | Holdings valued at the latest prices      |
+| GET    | `/api/portfolio/history`   | JWT  | Value vs. invested over time (for the chart) |
+| POST   | `/api/ingest/refresh`      | JWT  | Pull latest prices on demand (incremental ingest) |
 
 Auth is `Authorization: Bearer <token>` (JWT, bcrypt-hashed passwords). Plan body:
 

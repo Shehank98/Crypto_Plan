@@ -6,6 +6,26 @@ import { getLatestPrices } from "./prices.js";
 export const portfolioRouter = Router();
 portfolioRouter.use(requireAuth);
 
+const DAY_MS = 86_400_000;
+const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
+
+/** Sorted [ms, value] pairs; returns the value at the latest key <= t, or null. */
+function onOrBefore(pairs: Array<[number, number]>, t: number): number | null {
+  let lo = 0;
+  let hi = pairs.length - 1;
+  let ans: number | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pairs[mid]![0] <= t) {
+      ans = pairs[mid]![1];
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
 // Aggregate the user's holdings and value them at the latest ingested prices.
 portfolioRouter.get(
   "/",
@@ -68,5 +88,86 @@ portfolioRouter.get(
       },
       holdings,
     });
+  }),
+);
+
+// Portfolio value over time: invested vs. mark-to-market value, sampled from
+// the first purchase date to the latest available price date.
+portfolioRouter.get(
+  "/history",
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.userId;
+    const purchases = await prisma.purchase.findMany({
+      where: { userId },
+      orderBy: { date: "asc" },
+    });
+    if (purchases.length === 0) {
+      res.json({ points: [] });
+      return;
+    }
+
+    const coinIds = [...new Set(purchases.map((p) => p.coinId))];
+    const start = purchases[0]!.date;
+    const latestPrice = await prisma.priceHistory.findFirst({
+      where: { coinId: { in: coinIds } },
+      orderBy: { date: "desc" },
+      select: { date: true },
+    });
+    const end = latestPrice?.date ?? new Date();
+
+    const [priceRows, fxRows] = await Promise.all([
+      prisma.priceHistory.findMany({
+        where: { coinId: { in: coinIds }, date: { gte: start, lte: end } },
+        orderBy: { date: "asc" },
+        select: { coinId: true, date: true, priceUsd: true },
+      }),
+      prisma.fxRate.findMany({
+        where: { date: { lte: end } },
+        orderBy: { date: "asc" },
+        select: { date: true, usdToLkr: true },
+      }),
+    ]);
+
+    // Per-coin sorted [ms, priceUsd] series, and fx series.
+    const priceSeries = new Map<number, Array<[number, number]>>();
+    for (const id of coinIds) priceSeries.set(id, []);
+    for (const r of priceRows) priceSeries.get(r.coinId)!.push([r.date.getTime(), Number(r.priceUsd)]);
+    const fxSeries: Array<[number, number]> = fxRows.map((r) => [r.date.getTime(), Number(r.usdToLkr)]);
+
+    const priceLkrAt = (coinId: number, t: number): number | null => {
+      const usd = onOrBefore(priceSeries.get(coinId) ?? [], t);
+      const fx = onOrBefore(fxSeries, t);
+      return usd !== null && fx !== null ? usd * fx : null;
+    };
+
+    // Sample dates: cap at ~120 points across the range.
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+    const totalDays = Math.max(1, Math.round((endMs - startMs) / DAY_MS));
+    const step = Math.max(1, Math.ceil(totalDays / 120));
+    const sampleMs: number[] = [];
+    for (let t = startMs; t < endMs; t += step * DAY_MS) sampleMs.push(t);
+    sampleMs.push(endMs);
+
+    // Walk purchases forward, accumulating invested + per-coin units.
+    const unitsByCoin = new Map<number, number>();
+    let invested = 0;
+    let pi = 0;
+    const points = sampleMs.map((t) => {
+      while (pi < purchases.length && purchases[pi]!.date.getTime() <= t) {
+        const p = purchases[pi]!;
+        unitsByCoin.set(p.coinId, (unitsByCoin.get(p.coinId) ?? 0) + Number(p.units));
+        invested += Number(p.amountLkr);
+        pi++;
+      }
+      let value = 0;
+      for (const [coinId, units] of unitsByCoin) {
+        const price = priceLkrAt(coinId, t);
+        if (price !== null) value += units * price;
+      }
+      return { date: isoDate(new Date(t)), investedLkr: invested, valueLkr: value };
+    });
+
+    res.json({ points });
   }),
 );

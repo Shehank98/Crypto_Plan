@@ -6,8 +6,9 @@ import { AppShell } from "@/components/AppShell";
 import { AddPurchaseForm } from "@/components/AddPurchaseForm";
 import { HoldingsTable, PortfolioSummary } from "@/components/PortfolioView";
 import { PurchasesList } from "@/components/PurchasesList";
+import { PortfolioHistoryChart } from "@/components/charts/PortfolioHistoryChart";
 import { apiFetch } from "@/lib/api";
-import type { Coin, Portfolio, Purchase } from "@/lib/types";
+import type { Coin, Portfolio, PortfolioPoint, Purchase } from "@/lib/types";
 
 export default function DashboardPage() {
   return (
@@ -21,23 +22,43 @@ function Tracker() {
   const [coins, setCoins] = useState<Coin[]>([]);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [history, setHistory] = useState<PortfolioPoint[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [pf, pl] = await Promise.all([
+      const [pf, pl, hist] = await Promise.all([
         apiFetch<Portfolio>("/api/portfolio"),
         apiFetch<{ purchases: Purchase[] }>("/api/purchases"),
+        apiFetch<{ points: PortfolioPoint[] }>("/api/portfolio/history"),
       ]);
       setPortfolio(pf);
       setPurchases(pl.purchases);
+      setHistory(hist.points);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load portfolio");
     } finally {
       setLoaded(true);
     }
   }, []);
+
+  const refreshPrices = useCallback(async () => {
+    setRefreshing(true);
+    setError(null);
+    setFlash(null);
+    try {
+      await apiFetch("/api/ingest/refresh", { method: "POST" });
+      await refresh();
+      setFlash("Prices updated to the latest available.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to refresh prices");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
 
   useEffect(() => {
     apiFetch<{ coins: Coin[] }>("/api/coins")
@@ -58,11 +79,22 @@ function Tracker() {
             Log the crypto you&apos;ve bought; values update with the latest prices.
           </p>
         </div>
-        <Link href="/plans" className="btn-secondary">
-          Forecasts →
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refreshPrices}
+            disabled={refreshing}
+            className="btn-secondary"
+            title="Pull the latest prices"
+          >
+            {refreshing ? "Refreshing…" : "↻ Refresh prices"}
+          </button>
+          <Link href="/plans" className="btn-secondary">
+            Forecasts →
+          </Link>
+        </div>
       </div>
 
+      {flash && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{flash}</p>}
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       {noCoins && (
@@ -92,6 +124,7 @@ function Tracker() {
       ) : (
         portfolio && (
           <>
+            {history.length >= 2 && <PortfolioHistoryChart points={history} />}
             <HoldingsTable portfolio={portfolio} />
             <PurchasesList purchases={purchases} coins={coins} onChanged={refresh} />
           </>
