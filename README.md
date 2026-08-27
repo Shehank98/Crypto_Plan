@@ -83,37 +83,45 @@ npm run ingest:incremental      # trailing few days — the daily cron target
 Create **three services** from this repo, plus a Postgres plugin. Each service's config
 lives in a `railway.json` in its root directory (Nixpacks builder).
 
-> **⚠️ This is a monorepo — set each service's Root Directory first.** There is no app at
-> the repo root, so a service left at the default root fails the build with
-> `Railpack could not determine how to build the app` (it only sees `backend/`,
-> `frontend/`, `README.md`). In each service: **Settings → Root Directory** → set to
-> `backend` or `frontend`. Railway then reads that folder's `railway.json` (which pins the
-> Nixpacks builder) and builds correctly.
+This monorepo has **no app at the repo root**, so a service pointed at the root with
+auto-detection fails (`Railpack could not determine how to build the app`). There are two
+ways to deploy — pick one per service.
 
-| Service       | Root dir   | Config file             | What it does                                  |
-|---------------|------------|-------------------------|-----------------------------------------------|
-| **API**       | `backend`  | `railway.json`          | Runs `prisma migrate deploy`, then the Express server |
-| **Ingestion** | `backend`  | `railway.cron.json`     | Cron: daily incremental ingest (`0 3 * * *`)  |
-| **Frontend**  | `frontend` | `railway.json`          | Builds and serves the Next.js app             |
+#### Option A — root config files (no Root Directory needed) — recommended
 
-### Wiring it up
+The repo root ships a minimal `package.json` (activates the Node builder) plus root Railway
+configs that build/run a chosen sub-app. Each service builds from the root; only an env var
+selects which app. This is the most reliable path and needs no dashboard Root Directory.
 
-1. **Postgres**: add the Railway Postgres plugin. It exposes `DATABASE_URL`.
-2. **API service**: set root directory to `backend`. Add env vars (below). On deploy its
-   start command applies migrations then boots: `prisma migrate deploy && node dist/api/server.js`.
-   Generate a public domain — that URL is the API base.
-3. **Ingestion (cron) service**: also root `backend`, but set the env var
-   `RAILWAY_CONFIG_FILE=railway.cron.json` so Railway picks up the cron config. It runs
-   `node dist/scripts/ingest.js incremental` on the schedule `0 3 * * *` (03:00 UTC daily)
-   and exits — no restart loop. Give it the same `DATABASE_URL` and CoinGecko/FX vars.
-   > First-time setup: run a one-off `npm run seed` and `npm run ingest:backfill` (Railway
-   > "Run command" shell) so there's history to simulate against before the cron takes over.
-4. **Frontend service**: root `frontend`. Set `NEXT_PUBLIC_API_URL` to the API service's
-   public URL (baked into the client bundle at build time). Deploy.
+| Service       | `RAILWAY_CONFIG_FILE` | Builds  | Runs                                             |
+|---------------|-----------------------|---------|--------------------------------------------------|
+| **API**       | *(unset — default)* `railway.json` | backend | `prisma migrate deploy` then the Express server  |
+| **Ingestion** | `railway.cron.json`   | backend | Cron daily (`0 3 * * *`) incremental ingest      |
+| **Frontend**  | `railway.web.json`    | frontend| `next start`                                     |
+
+1. **Postgres**: add the Railway Postgres plugin (exposes `DATABASE_URL`).
+2. **API service**: deploy the repo (leave Root Directory empty). It uses the root
+   `railway.json` by default. Add env vars (below), deploy, then **Generate Domain** — that
+   URL is the API base.
+3. **Ingestion service**: new service from the same repo; set env var
+   `RAILWAY_CONFIG_FILE=railway.cron.json`. Same `DATABASE_URL` + CoinGecko/FX vars.
+   > First run: from a Railway shell run `npm run seed` and `npm run ingest:backfill` so
+   > there's history to simulate against before the cron takes over.
+4. **Frontend service**: new service from the same repo; set
+   `RAILWAY_CONFIG_FILE=railway.web.json` and `NEXT_PUBLIC_API_URL` to the API domain
+   (baked in at build time). Deploy and generate a domain.
+
+#### Option B — per-service Root Directory
+
+Alternatively set each service's **Settings → Root Directory** to `backend` (API + cron) or
+`frontend`, which makes Railway read `backend/railway.json` / `backend/railway.cron.json` /
+`frontend/railway.json` instead. Set it to the bare folder name (`backend`, not `/backend`)
+and trigger a fresh deploy. The cron service still needs
+`RAILWAY_CONFIG_FILE=railway.cron.json`.
 
 ### Environment variables
 
-**API + Ingestion services** (`backend`):
+**API + Ingestion services**:
 
 | Var                 | Required | Notes                                                        |
 |---------------------|----------|--------------------------------------------------------------|
@@ -126,18 +134,21 @@ lives in a `railway.json` in its root directory (Nixpacks builder).
 | `FX_BASE_URL`       | no       | Default `https://api.exchangerate.host` (covers LKR).        |
 | `FX_ACCESS_KEY`     | no       | If your exchangerate.host plan requires a key.               |
 | `BACKFILL_FROM`     | no       | ISO start date for backfill (default `2019-01-01`).          |
-| `RAILWAY_CONFIG_FILE` | cron only | Set to `railway.cron.json` on the ingestion service.       |
+| `RAILWAY_CONFIG_FILE` | cron only | Set to `railway.cron.json` on the ingestion service (Option A). |
 
-**Frontend service** (`frontend`):
+**Frontend service**:
 
 | Var                   | Required | Notes                                              |
 |-----------------------|----------|----------------------------------------------------|
 | `NEXT_PUBLIC_API_URL` | yes      | Public URL of the API service (no trailing slash). |
+| `RAILWAY_CONFIG_FILE` | Option A | Set to `railway.web.json` when using root configs. |
 
 ### Troubleshooting
 
-- **`Railpack could not determine how to build the app`** — the service's Root Directory
-  is still the repo root. Set it to `backend` or `frontend` (see the callout above).
+- **`Railpack could not determine how to build the app`** — the build context is the repo
+  root and the root configs aren't being read. Fastest fix: use **Option A** (the root
+  `railway.json` / `RAILWAY_CONFIG_FILE`), which builds fine from the root. Or use
+  **Option B** and set the service's Root Directory to `backend`/`frontend`.
 - **Cron service runs the API instead of ingesting** — it's missing
   `RAILWAY_CONFIG_FILE=railway.cron.json`. Without it Railway reads `railway.json` and
   starts the server.
