@@ -80,44 +80,34 @@ npm run ingest:incremental      # trailing few days — the daily cron target
 
 ## Deployment (Railway)
 
-Create **three services** from this repo, plus a Postgres plugin. Each service's config
-lives in a `railway.json` in its root directory (Nixpacks builder).
+Deploys use **Dockerfiles** (`backend/Dockerfile`, `frontend/Dockerfile`), which Railway
+runs deterministically — no language auto-detection, so the Railpack
+"could not determine how to build the app" error can't occur. Create **three services**
+from this repo plus a Postgres plugin. All three build from the **repo root** (the
+Dockerfiles `COPY backend/…` / `COPY frontend/…`), so **leave each service's Root Directory
+empty** — setting it would break the Docker build context.
 
-This monorepo has **no app at the repo root**, so a service pointed at the root with
-auto-detection fails (`Railpack could not determine how to build the app`). There are two
-ways to deploy — pick one per service.
+| Service       | `RAILWAY_CONFIG_FILE` | Dockerfile          | Runs                                            |
+|---------------|-----------------------|---------------------|-------------------------------------------------|
+| **API**       | *(unset — default `railway.json`)* | `backend/Dockerfile`  | `prisma migrate deploy` then the Express server |
+| **Ingestion** | `railway.cron.json`   | `backend/Dockerfile`| Cron daily (`0 3 * * *`) incremental ingest     |
+| **Frontend**  | `railway.web.json`    | `frontend/Dockerfile`| `next start`                                    |
 
-#### Option A — root config files (no Root Directory needed) — recommended
-
-The repo root ships a minimal `package.json` (activates the Node builder) plus root Railway
-configs that build/run a chosen sub-app. Each service builds from the root; only an env var
-selects which app. This is the most reliable path and needs no dashboard Root Directory.
-
-| Service       | `RAILWAY_CONFIG_FILE` | Builds  | Runs                                             |
-|---------------|-----------------------|---------|--------------------------------------------------|
-| **API**       | *(unset — default)* `railway.json` | backend | `prisma migrate deploy` then the Express server  |
-| **Ingestion** | `railway.cron.json`   | backend | Cron daily (`0 3 * * *`) incremental ingest      |
-| **Frontend**  | `railway.web.json`    | frontend| `next start`                                     |
+Each config sets `build.builder = "DOCKERFILE"` and the `dockerfilePath`; the cron config
+also overrides the start command and adds the schedule.
 
 1. **Postgres**: add the Railway Postgres plugin (exposes `DATABASE_URL`).
-2. **API service**: deploy the repo (leave Root Directory empty). It uses the root
+2. **API service**: deploy the repo, **Root Directory empty**. It uses the root
    `railway.json` by default. Add env vars (below), deploy, then **Generate Domain** — that
    URL is the API base.
-3. **Ingestion service**: new service from the same repo; set env var
+3. **Ingestion service**: new service, same repo, Root Directory empty; set env var
    `RAILWAY_CONFIG_FILE=railway.cron.json`. Same `DATABASE_URL` + CoinGecko/FX vars.
    > First run: from a Railway shell run `npm run seed` and `npm run ingest:backfill` so
    > there's history to simulate against before the cron takes over.
-4. **Frontend service**: new service from the same repo; set
-   `RAILWAY_CONFIG_FILE=railway.web.json` and `NEXT_PUBLIC_API_URL` to the API domain
-   (baked in at build time). Deploy and generate a domain.
-
-#### Option B — per-service Root Directory
-
-Alternatively set each service's **Settings → Root Directory** to `backend` (API + cron) or
-`frontend`, which makes Railway read `backend/railway.json` / `backend/railway.cron.json` /
-`frontend/railway.json` instead. Set it to the bare folder name (`backend`, not `/backend`)
-and trigger a fresh deploy. The cron service still needs
-`RAILWAY_CONFIG_FILE=railway.cron.json`.
+4. **Frontend service**: new service, same repo, Root Directory empty; set
+   `RAILWAY_CONFIG_FILE=railway.web.json` and `NEXT_PUBLIC_API_URL` to the API domain.
+   Because `NEXT_PUBLIC_*` is inlined at build time, the Dockerfile reads it as a build arg
+   (Railway passes service variables to the build), so set it before deploying.
 
 ### Environment variables
 
@@ -134,21 +124,23 @@ and trigger a fresh deploy. The cron service still needs
 | `FX_BASE_URL`       | no       | Default `https://api.exchangerate.host` (covers LKR).        |
 | `FX_ACCESS_KEY`     | no       | If your exchangerate.host plan requires a key.               |
 | `BACKFILL_FROM`     | no       | ISO start date for backfill (default `2019-01-01`).          |
-| `RAILWAY_CONFIG_FILE` | cron only | Set to `railway.cron.json` on the ingestion service (Option A). |
+| `RAILWAY_CONFIG_FILE` | cron only | Set to `railway.cron.json` on the ingestion service. |
 
 **Frontend service**:
 
 | Var                   | Required | Notes                                              |
 |-----------------------|----------|----------------------------------------------------|
 | `NEXT_PUBLIC_API_URL` | yes      | Public URL of the API service (no trailing slash). |
-| `RAILWAY_CONFIG_FILE` | Option A | Set to `railway.web.json` when using root configs. |
+| `RAILWAY_CONFIG_FILE` | yes      | Set to `railway.web.json` on the frontend service. |
 
 ### Troubleshooting
 
-- **`Railpack could not determine how to build the app`** — the build context is the repo
-  root and the root configs aren't being read. Fastest fix: use **Option A** (the root
-  `railway.json` / `RAILWAY_CONFIG_FILE`), which builds fine from the root. Or use
-  **Option B** and set the service's Root Directory to `backend`/`frontend`.
+- **`Railpack could not determine how to build the app`** — the service isn't using the
+  Dockerfile. Confirm it's deploying the latest commit (the one with `backend/Dockerfile`),
+  that `RAILWAY_CONFIG_FILE` is set correctly (cron/frontend), and that **Root Directory is
+  empty** — the Dockerfiles build from the repo root.
+- **Docker build fails on `COPY backend/…` (not found)** — Root Directory is set. Clear it;
+  the build context must be the repo root.
 - **Cron service runs the API instead of ingesting** — it's missing
   `RAILWAY_CONFIG_FILE=railway.cron.json`. Without it Railway reads `railway.json` and
   starts the server.
