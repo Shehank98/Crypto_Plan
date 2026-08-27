@@ -12,19 +12,44 @@ export interface MonthlyPoint {
 }
 
 const monthKey = (isoDate: string): string => isoDate.slice(0, 7);
+const dayOfMonth = (isoDate: string): number => Number(isoDate.slice(8, 10));
+
+export interface SeriesOptions {
+  /**
+   * Day of month the plan purchases on (1-28). For each month we take the
+   * first observation on or after this day; if none exists that month (e.g.
+   * data ends mid-month), we fall back to the latest earlier observation in
+   * the same month. Default 1.
+   */
+  purchaseDay?: number;
+  /** Optional lower bound (ISO YYYY-MM-DD); months before this are dropped. */
+  startDate?: string;
+}
 
 /**
  * Reduce daily observations to one value per calendar month by taking the
- * *first* observation on or after the start of each month (the natural DCA
- * purchase day). Returns a Map keyed by YYYY-MM.
+ * first observation on or after `purchaseDay`, falling back to the latest
+ * earlier observation that month. Returns a Map keyed by YYYY-MM.
  */
-function firstOfMonth<T extends { date: string }>(rows: T[]): Map<string, T> {
-  const byMonth = new Map<string, T>();
-  // Sort ascending so the first row we see for a month is the earliest.
+function selectMonthly<T extends { date: string }>(
+  rows: T[],
+  purchaseDay: number,
+): Map<string, T> {
+  // Group by month, preserving ascending date order.
+  const grouped = new Map<string, T[]>();
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
   for (const row of sorted) {
     const key = monthKey(row.date);
-    if (!byMonth.has(key)) byMonth.set(key, row);
+    const arr = grouped.get(key) ?? [];
+    arr.push(row);
+    grouped.set(key, arr);
+  }
+
+  const byMonth = new Map<string, T>();
+  for (const [key, monthRows] of grouped) {
+    const onOrAfter = monthRows.find((r) => dayOfMonth(r.date) >= purchaseDay);
+    // find() on ascending rows gives the first >= purchaseDay; else last earlier.
+    byMonth.set(key, onOrAfter ?? monthRows[monthRows.length - 1]!);
   }
   return byMonth;
 }
@@ -39,8 +64,11 @@ export function buildMonthlySeries(
   coinIds: number[],
   prices: PricePoint[],
   fxRates: FxPoint[],
+  options: SeriesOptions = {},
 ): MonthlyPoint[] {
-  const fxByMonth = firstOfMonth(fxRates);
+  const purchaseDay = options.purchaseDay ?? 1;
+  const startMonth = options.startDate ? monthKey(options.startDate) : null;
+  const fxByMonth = selectMonthly(fxRates, purchaseDay);
 
   // Per-coin: month -> priceUsd.
   const pricesByCoin = new Map<number, Map<string, number>>();
@@ -53,7 +81,7 @@ export function buildMonthlySeries(
     pricesForCoin.set(p.coinId, arr);
   }
   for (const id of coinIds) {
-    const monthly = firstOfMonth(pricesForCoin.get(id) ?? []);
+    const monthly = selectMonthly(pricesForCoin.get(id) ?? [], purchaseDay);
     const target = pricesByCoin.get(id)!;
     for (const [m, pt] of monthly) target.set(m, pt.priceUsd);
   }
@@ -62,6 +90,7 @@ export function buildMonthlySeries(
   const candidateMonths = [...fxByMonth.keys()].sort();
   const series: MonthlyPoint[] = [];
   for (const month of candidateMonths) {
+    if (startMonth && month < startMonth) continue;
     const fx = fxByMonth.get(month)!.usdToLkr;
     const priceLkr = new Map<number, number>();
     let complete = true;

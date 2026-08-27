@@ -49,6 +49,8 @@ CREATE TABLE "plans" (
     "user_id" INTEGER NOT NULL,
     "name" TEXT NOT NULL,
     "monthly_amount_lkr" DECIMAL(18,2) NOT NULL,
+    "purchase_day_of_month" INTEGER NOT NULL DEFAULT 1,
+    "start_date" DATE NOT NULL,
     "allocations" JSONB NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,

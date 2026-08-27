@@ -13,9 +13,9 @@ export function createApp() {
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
-  app.use("/auth", authRouter);
-  app.use("/coins", coinsRouter);
-  app.use("/plans", plansRouter);
+  app.use("/api/auth", authRouter);
+  app.use("/api/coins", coinsRouter);
+  app.use("/api/plans", plansRouter);
 
   // 404 for unmatched routes.
   app.use((_req, res) => res.status(404).json({ error: "Not found" }));

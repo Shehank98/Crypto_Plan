@@ -69,6 +69,14 @@ export interface BacktestResult {
   windows: BacktestWindow[];
 }
 
+/** Percentile bands of portfolio value at one simulated month (for the fan chart). */
+export interface MonteCarloMonthBand extends PercentileBreakdown {
+  /** 1-based month index into the simulated horizon. */
+  month: number;
+  /** Cumulative amount invested by the end of this month (LKR). */
+  investedLkr: number;
+}
+
 export interface MonteCarloResult {
   simulations: number;
   months: number;
@@ -77,6 +85,8 @@ export interface MonteCarloResult {
   endingValueLkr: PercentileBreakdown;
   /** Percentile bands of ROI %. */
   roiPct: PercentileBreakdown;
+  /** Per-month percentile bands of portfolio value — drives the fan chart. */
+  monthlyBands: MonteCarloMonthBand[];
   meanEndingValueLkr: number;
   /** Fraction of simulations ending below the amount invested. */
   probLoss: number;
@@ -85,6 +95,10 @@ export interface MonteCarloResult {
 export interface BacktestOptions {
   /** Length of each rolling window, in monthly purchases. Default 36. */
   windowMonths?: number;
+  /** Day of month purchases land on (1-28). Default 1. */
+  purchaseDay?: number;
+  /** Optional ISO lower bound; history before this date is ignored. */
+  startDate?: string;
 }
 
 export interface MonteCarloOptions {
@@ -94,4 +108,8 @@ export interface MonteCarloOptions {
   blockSize?: number;
   /** Optional deterministic RNG seed for reproducible runs / tests. */
   seed?: number;
+  /** Day of month purchases land on (1-28). Default 1. */
+  purchaseDay?: number;
+  /** Optional ISO lower bound; history before this date is ignored. */
+  startDate?: string;
 }

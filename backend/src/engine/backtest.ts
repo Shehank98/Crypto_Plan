@@ -31,7 +31,10 @@ export function runBacktest(
 ): BacktestResult {
   const windowMonths = options.windowMonths ?? 36;
   const coinIds = plan.allocations.map((a) => a.coinId);
-  const series = buildMonthlySeries(coinIds, priceHistory, fxRates);
+  const series = buildMonthlySeries(coinIds, priceHistory, fxRates, {
+    purchaseDay: options.purchaseDay,
+    startDate: options.startDate,
+  });
 
   const windows: BacktestWindow[] = [];
   const years = windowMonths / 12;

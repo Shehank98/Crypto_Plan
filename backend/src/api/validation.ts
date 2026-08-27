@@ -13,6 +13,13 @@ const allocationSchema = z.object({
 export const planInputSchema = z.object({
   name: z.string().min(1).max(120),
   monthlyAmountLkr: z.number().positive(),
+  // 1-28 keeps every month valid (no Feb 29/30/31 edge cases).
+  purchaseDayOfMonth: z.number().int().min(1).max(28),
+  // ISO date (YYYY-MM-DD) the plan's contributions begin.
+  startDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "startDate must be YYYY-MM-DD")
+    .refine((s) => !Number.isNaN(Date.parse(s)), "startDate is not a valid date"),
   allocations: z
     .array(allocationSchema)
     .min(1, "At least one allocation is required")

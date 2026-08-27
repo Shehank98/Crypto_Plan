@@ -61,14 +61,18 @@ model FxRate {
 }
 
 model Plan {
-  id               Int      @id @default(autoincrement())
-  userId           Int      @map("user_id")
-  name             String
-  monthlyAmountLkr Decimal  @map("monthly_amount_lkr") @db.Decimal(18, 2)
+  id                 Int      @id @default(autoincrement())
+  userId             Int      @map("user_id")
+  name               String
+  monthlyAmountLkr   Decimal  @map("monthly_amount_lkr") @db.Decimal(18, 2)
+  // Day of month purchases land on (1-28).
+  purchaseDayOfMonth Int      @default(1) @map("purchase_day_of_month")
+  // Date the plan's contributions begin.
+  startDate          DateTime @map("start_date") @db.Date
   // Array of { coinId: number, pct: number }. pct values should sum to 100.
-  allocations      Json     @db.JsonB
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  allocations        Json     @db.JsonB
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
   user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   results PlanResult[]

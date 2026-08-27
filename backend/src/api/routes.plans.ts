@@ -46,6 +46,8 @@ plansRouter.post(
         userId: req.user!.userId,
         name: body.name,
         monthlyAmountLkr: new Prisma.Decimal(body.monthlyAmountLkr),
+        purchaseDayOfMonth: body.purchaseDayOfMonth,
+        startDate: new Date(`${body.startDate}T00:00:00.000Z`),
         allocations: body.allocations,
       },
     });
@@ -75,6 +77,8 @@ plansRouter.put(
       data: {
         name: body.name,
         monthlyAmountLkr: new Prisma.Decimal(body.monthlyAmountLkr),
+        purchaseDayOfMonth: body.purchaseDayOfMonth,
+        startDate: new Date(`${body.startDate}T00:00:00.000Z`),
         allocations: body.allocations,
       },
     });

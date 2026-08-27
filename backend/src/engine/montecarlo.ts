@@ -6,6 +6,7 @@ import { buildMonthlySeries, monthlyReturns } from "./series.js";
 import { mean, mulberry32, percentileBreakdown } from "./stats.js";
 import type {
   FxPoint,
+  MonteCarloMonthBand,
   MonteCarloOptions,
   MonteCarloResult,
   PlanInput,
@@ -68,7 +69,10 @@ export function runMonteCarlo(
   const rng = mulberry32(options.seed ?? 0xc0ffee);
 
   const coinIds = plan.allocations.map((a) => a.coinId);
-  const series = buildMonthlySeries(coinIds, priceHistory, fxRates);
+  const series = buildMonthlySeries(coinIds, priceHistory, fxRates, {
+    purchaseDay: options.purchaseDay,
+    startDate: options.startDate,
+  });
 
   const investedLkr = plan.monthlyAmountLkr * months;
 
@@ -81,6 +85,7 @@ export function runMonteCarlo(
       investedLkr,
       endingValueLkr: zeros,
       roiPct: zeros,
+      monthlyBands: [],
       meanEndingValueLkr: NaN,
       probLoss: NaN,
     };
@@ -94,6 +99,9 @@ export function runMonteCarlo(
   const endingValues: number[] = [];
   const rois: number[] = [];
   let lossCount = 0;
+  // valuesByMonth[m] collects every simulation's portfolio value at month m,
+  // so we can compute per-month percentile bands for the fan chart.
+  const valuesByMonth: number[][] = Array.from({ length: months }, () => []);
 
   for (let s = 0; s < simulations; s++) {
     const path = bootstrapPath(coinIds, returns, months, blockSize, rng);
@@ -118,11 +126,19 @@ export function runMonteCarlo(
       plan.allocations,
       monthlyPrices,
     );
+    for (let m = 0; m < months; m++) valuesByMonth[m]!.push(valuations[m]!.valueLkr);
+
     const ending = valuations[valuations.length - 1]!.valueLkr;
     endingValues.push(ending);
     rois.push(investedLkr === 0 ? 0 : ((ending - investedLkr) / investedLkr) * 100);
     if (ending < investedLkr) lossCount++;
   }
+
+  const monthlyBands: MonteCarloMonthBand[] = valuesByMonth.map((values, i) => ({
+    month: i + 1,
+    investedLkr: plan.monthlyAmountLkr * (i + 1),
+    ...percentileBreakdown(values),
+  }));
 
   return {
     simulations,
@@ -130,6 +146,7 @@ export function runMonteCarlo(
     investedLkr,
     endingValueLkr: percentileBreakdown(endingValues),
     roiPct: percentileBreakdown(rois),
+    monthlyBands,
     meanEndingValueLkr: mean(endingValues),
     probLoss: lossCount / simulations,
   };

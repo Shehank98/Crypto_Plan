@@ -80,6 +80,8 @@ export async function simulatePlan(
 
   const simulations = opts.simulations ?? 10_000;
   const months = opts.months ?? 36;
+  const purchaseDay = plan.purchaseDayOfMonth;
+  const startDate = isoDate(plan.startDate);
 
   // Hash the plan + data coverage so a cache row is reused only while inputs
   // are unchanged (new plan config or newly ingested data => recompute).
@@ -88,6 +90,8 @@ export async function simulatePlan(
       JSON.stringify({
         monthlyAmountLkr: planInput.monthlyAmountLkr,
         allocations: planInput.allocations,
+        purchaseDay,
+        startDate,
         simulations,
         months,
         priceRows: priceRows.length,
@@ -113,10 +117,16 @@ export async function simulatePlan(
     }
   }
 
-  const backtest = runBacktest(planInput, priceHistory, fxRates, { windowMonths: months });
+  const backtest = runBacktest(planInput, priceHistory, fxRates, {
+    windowMonths: months,
+    purchaseDay,
+    // Backtest spans all available history for the distribution; startDate is
+    // stored plan metadata and intentionally not used to clip rolling windows.
+  });
   const montecarlo = runMonteCarlo(planInput, priceHistory, fxRates, {
     simulations,
     months,
+    purchaseDay,
     seed: opts.seed,
   });
 

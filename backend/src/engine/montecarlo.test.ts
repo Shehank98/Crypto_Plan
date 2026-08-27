@@ -99,6 +99,26 @@ describe("runMonteCarlo", () => {
     expect(a.meanEndingValueLkr).toEqual(b.meanEndingValueLkr);
   });
 
+  it("emits one ascending-invested fan-chart band per simulated month", () => {
+    const prices = priceSeries(1, [100, 130, 90, 150, 80, 170, 95, 200]);
+    const fx = fxSeries(1, 8);
+    const result = runMonteCarlo(singleCoinPlan, prices, fx, {
+      simulations: 500,
+      months: 12,
+      seed: 5,
+    });
+
+    expect(result.monthlyBands).toHaveLength(12);
+    result.monthlyBands.forEach((band, i) => {
+      expect(band.month).toBe(i + 1);
+      expect(band.investedLkr).toBeCloseTo(1000 * (i + 1), 6);
+      expect(band.p5).toBeLessThanOrEqual(band.p50);
+      expect(band.p50).toBeLessThanOrEqual(band.p95);
+    });
+    // Final band's median ties to the ending-value median band.
+    expect(result.monthlyBands[11]!.p50).toBeCloseTo(result.endingValueLkr.p50, 6);
+  });
+
   it("returns NaN bands when there is not enough history", () => {
     const prices = priceSeries(1, [100]);
     const fx = fxSeries(1, 1);
