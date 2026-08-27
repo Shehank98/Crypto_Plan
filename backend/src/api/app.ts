@@ -4,6 +4,8 @@ import { errorHandler } from "./middleware.js";
 import { authRouter } from "./routes.auth.js";
 import { coinsRouter } from "./routes.coins.js";
 import { plansRouter } from "./routes.plans.js";
+import { portfolioRouter } from "./routes.portfolio.js";
+import { purchasesRouter } from "./routes.purchases.js";
 
 export function createApp() {
   const app = express();
@@ -16,6 +18,8 @@ export function createApp() {
   app.use("/api/auth", authRouter);
   app.use("/api/coins", coinsRouter);
   app.use("/api/plans", plansRouter);
+  app.use("/api/purchases", purchasesRouter);
+  app.use("/api/portfolio", portfolioRouter);
 
   // 404 for unmatched routes.
   app.use((_req, res) => res.status(404).json({ error: "Not found" }));

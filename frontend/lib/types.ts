@@ -113,3 +113,45 @@ export interface AuthUser {
   email: string;
   createdAt: string;
 }
+
+// --- Manual purchase tracker ---
+
+export interface Purchase {
+  id: number;
+  coinId: number;
+  date: string;
+  amountLkr: number;
+  priceUsd: number;
+  usdToLkr: number;
+  priceLkr: number;
+  units: number;
+  createdAt: string;
+}
+
+export interface Holding {
+  coinId: number;
+  symbol: string;
+  name: string;
+  units: number;
+  purchases: number;
+  investedLkr: number;
+  avgPriceLkr: number;
+  currentPriceLkr: number | null;
+  priceAsOf: string | null;
+  currentValueLkr: number;
+  profitLkr: number;
+  roiPct: number;
+  weightPct: number;
+}
+
+export interface Portfolio {
+  totals: {
+    investedLkr: number;
+    currentValueLkr: number;
+    profitLkr: number;
+    roiPct: number;
+    coinCount: number;
+    purchaseCount: number;
+  };
+  holdings: Holding[];
+}

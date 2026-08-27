@@ -73,6 +73,10 @@ npm run build && npm start
 | DELETE | `/api/plans/:id`           | JWT  | Delete a plan                             |
 | POST   | `/api/plans/:id/simulate`  | JWT  | Run both engines, cache to `plan_results` |
 | GET    | `/api/plans/:id/results`   | JWT  | Latest cached results                     |
+| POST   | `/api/purchases`           | JWT  | Log a purchase `{coinId,date,amountLkr}`; auto-prices it |
+| GET    | `/api/purchases`           | JWT  | List the user's purchases                 |
+| DELETE | `/api/purchases/:id`       | JWT  | Delete a purchase                         |
+| GET    | `/api/portfolio`           | JWT  | Holdings valued at the latest prices      |
 
 Auth is `Authorization: Bearer <token>` (JWT, bcrypt-hashed passwords). Plan body:
 

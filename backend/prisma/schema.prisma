@@ -17,7 +17,8 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  plans Plan[]
+  plans     Plan[]
+  purchases Purchase[]
 
   @@map("users")
 }
@@ -30,6 +31,7 @@ model Coin {
   createdAt   DateTime @default(now()) @map("created_at")
 
   priceHistory PriceHistory[]
+  purchases    Purchase[]
 
   @@map("coins")
 }
@@ -96,4 +98,26 @@ model PlanResult {
 
   @@index([planId])
   @@map("plan_results")
+}
+
+// A single manual purchase logged by a user. The price at the purchase date is
+// captured at creation from price_history + fx_rates, and `units` derived from it.
+model Purchase {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  coinId    Int      @map("coin_id")
+  date      DateTime @db.Date // the purchase date
+  amountLkr Decimal  @map("amount_lkr") @db.Decimal(18, 2)
+  // Captured price context at (or on/before) the purchase date.
+  priceUsd  Decimal  @map("price_usd") @db.Decimal(24, 8)
+  usdToLkr  Decimal  @map("usd_to_lkr") @db.Decimal(18, 6)
+  units     Decimal  @db.Decimal(36, 18) // amountLkr / (priceUsd * usdToLkr)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coin Coin @relation(fields: [coinId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, coinId])
+  @@map("purchases")
 }

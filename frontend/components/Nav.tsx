@@ -14,10 +14,10 @@ export function Nav() {
         </Link>
         <nav className="flex items-center gap-3 text-sm">
           <Link href="/dashboard" className="text-slate-600 hover:text-slate-900">
-            Dashboard
+            Portfolio
           </Link>
-          <Link href="/plans/new" className="text-slate-600 hover:text-slate-900">
-            New plan
+          <Link href="/plans" className="text-slate-600 hover:text-slate-900">
+            Forecasts
           </Link>
           {user && (
             <>

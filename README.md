@@ -3,10 +3,14 @@
 Plan a monthly dollar-cost-averaging (DCA) crypto strategy in **LKR**, split across coins
 (BTC, ETH, BNB, SOL to start, extensible), then see:
 
-- **(a) Historical backtest** — how the plan would have performed across every rolling
-  36-month window in the available data.
-- **(b) 3-year forecast** — a probabilistic Monte Carlo projection using block-bootstrap
-  resampling of historical monthly returns (no normal-distribution assumption).
+- **Portfolio tracker (main view)** — log the crypto you actually bought (coin + date +
+  LKR amount); the price on that date is fetched automatically, units are computed, and your
+  holdings are valued live against the latest ingested prices (invested, current value, P/L).
+- **Forecast plans (secondary)** — define a monthly DCA plan and see:
+  - **(a) Historical backtest** — how the plan would have performed across every rolling
+    36-month window in the available data.
+  - **(b) 3-year forecast** — a probabilistic Monte Carlo projection using block-bootstrap
+    resampling of historical monthly returns (no normal-distribution assumption).
 
 ## Monorepo layout
 

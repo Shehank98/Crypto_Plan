@@ -38,5 +38,16 @@ export const planInputSchema = z.object({
     }),
 });
 
+export const purchaseInputSchema = z.object({
+  coinId: z.number().int().positive(),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD")
+    .refine((s) => !Number.isNaN(Date.parse(s)), "date is not a valid date")
+    .refine((s) => s <= new Date().toISOString().slice(0, 10), "date cannot be in the future"),
+  amountLkr: z.number().positive(),
+});
+
 export type CredentialsInput = z.infer<typeof credentialsSchema>;
 export type PlanBodyInput = z.infer<typeof planInputSchema>;
+export type PurchaseBodyInput = z.infer<typeof purchaseInputSchema>;
