@@ -2,16 +2,13 @@
   "name": "crypto-dca-planner",
   "version": "0.1.0",
   "private": true,
-  "description": "Monorepo root. Lets Railway build a chosen sub-app from the repo root without a Root Directory setting.",
+  "description": "Monorepo root. Single Railway service builds/runs both the API and the Next.js UI (see Dockerfile).",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build:api": "cd backend && npm ci && npm run build",
-    "start:api": "cd backend && npx prisma migrate deploy && node dist/api/server.js",
-    "start:cron": "cd backend && node dist/scripts/ingest.js incremental",
-    "build:web": "cd frontend && npm ci && npm run build",
-    "start:web": "cd frontend && npm run start",
-    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev:api": "cd backend && npm run dev",
+    "dev:web": "cd frontend && npm run dev"
   }
 }

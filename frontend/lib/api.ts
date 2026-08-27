@@ -1,7 +1,10 @@
 // Thin fetch client for the Express API. Attaches the JWT from localStorage
 // and normalizes error handling.
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+// Default to same-origin ("") so the browser calls /api/... on the Next.js
+// server, which proxies to the Express API (see next.config.mjs rewrites).
+// Set NEXT_PUBLIC_API_URL only if you run the API on a separate origin.
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const TOKEN_KEY = "dca_token";
 
 export function getToken(): string | null {

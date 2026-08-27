@@ -14,7 +14,9 @@ export const env = {
   databaseUrl: () => required("DATABASE_URL"),
   jwtSecret: () => required("JWT_SECRET"),
   jwtExpiresIn: () => optional("JWT_EXPIRES_IN", "7d"),
-  port: () => parseInt(optional("PORT", "4000"), 10),
+  // API_PORT wins so the combined single-service container can pin the API to
+  // an internal port (Next.js takes Railway's PORT). Falls back to PORT, then 4000.
+  port: () => parseInt(process.env.API_PORT ?? process.env.PORT ?? "4000", 10),
 
   coingeckoApiKey: () => optional("COINGECKO_API_KEY", ""),
   coingeckoBaseUrl: () => optional("COINGECKO_BASE_URL", "https://api.coingecko.com/api/v3"),
