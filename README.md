@@ -83,6 +83,13 @@ npm run ingest:incremental      # trailing few days — the daily cron target
 Create **three services** from this repo, plus a Postgres plugin. Each service's config
 lives in a `railway.json` in its root directory (Nixpacks builder).
 
+> **⚠️ This is a monorepo — set each service's Root Directory first.** There is no app at
+> the repo root, so a service left at the default root fails the build with
+> `Railpack could not determine how to build the app` (it only sees `backend/`,
+> `frontend/`, `README.md`). In each service: **Settings → Root Directory** → set to
+> `backend` or `frontend`. Railway then reads that folder's `railway.json` (which pins the
+> Nixpacks builder) and builds correctly.
+
 | Service       | Root dir   | Config file             | What it does                                  |
 |---------------|------------|-------------------------|-----------------------------------------------|
 | **API**       | `backend`  | `railway.json`          | Runs `prisma migrate deploy`, then the Express server |
@@ -126,6 +133,18 @@ lives in a `railway.json` in its root directory (Nixpacks builder).
 | Var                   | Required | Notes                                              |
 |-----------------------|----------|----------------------------------------------------|
 | `NEXT_PUBLIC_API_URL` | yes      | Public URL of the API service (no trailing slash). |
+
+### Troubleshooting
+
+- **`Railpack could not determine how to build the app`** — the service's Root Directory
+  is still the repo root. Set it to `backend` or `frontend` (see the callout above).
+- **Cron service runs the API instead of ingesting** — it's missing
+  `RAILWAY_CONFIG_FILE=railway.cron.json`. Without it Railway reads `railway.json` and
+  starts the server.
+- **`prisma migrate deploy` not found at boot** — `prisma` is a runtime dependency here,
+  so this shouldn't happen; if you slimmed dependencies, restore it to `dependencies`.
+- **Frontend calls `localhost` in production** — `NEXT_PUBLIC_API_URL` is baked in at
+  build time. Set it before the frontend build and redeploy after changing it.
 
 ## API contract & engine
 
