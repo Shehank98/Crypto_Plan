@@ -127,6 +127,7 @@ plansRouter.get(
       backtest: result.backtestResults,
       montecarlo: result.montecarloResults,
       computedAt: result.computedAt.toISOString(),
+      cached: true,
     });
   }),
 );

@@ -28,6 +28,17 @@ export interface FxPoint {
   usdToLkr: number;
 }
 
+/** Per-coin holdings breakdown at the end of a simulated run. */
+export interface CoinBreakdown {
+  coinId: number;
+  /** Total contributed to this coin over the run (LKR). */
+  investedLkr: number;
+  endingUnits: number;
+  endingValueLkr: number;
+  /** Share of the ending portfolio value, percent. */
+  endingWeightPct: number;
+}
+
 /** Result for a single 36-month backtest window. */
 export interface BacktestWindow {
   /** ISO YYYY-MM of the first purchase month. */
@@ -42,6 +53,8 @@ export interface BacktestWindow {
   cagr: number;
   /** Worst peak-to-trough decline of mark-to-market value, as a fraction (0.30 = -30%). */
   maxDrawdown: number;
+  /** Per-coin ending holdings for this window. */
+  perCoin: CoinBreakdown[];
 }
 
 export interface PercentileBreakdown {
@@ -57,6 +70,8 @@ export interface BacktestAggregate {
   windowMonths: number;
   best: BacktestWindow | null;
   worst: BacktestWindow | null;
+  /** The window at the median ROI position — the representative middle scenario. */
+  median: BacktestWindow | null;
   medianRoiPct: number;
   roiPct: PercentileBreakdown;
   cagr: PercentileBreakdown;
@@ -77,6 +92,16 @@ export interface MonteCarloMonthBand extends PercentileBreakdown {
   investedLkr: number;
 }
 
+/** Expected per-coin ending position across all Monte Carlo paths. */
+export interface MonteCarloCoinBreakdown {
+  coinId: number;
+  investedLkr: number;
+  /** Mean ending value of this coin's holdings across simulations (LKR). */
+  meanEndingValueLkr: number;
+  /** Share of the mean ending portfolio value, percent. */
+  meanEndingWeightPct: number;
+}
+
 export interface MonteCarloResult {
   simulations: number;
   months: number;
@@ -87,6 +112,8 @@ export interface MonteCarloResult {
   roiPct: PercentileBreakdown;
   /** Per-month percentile bands of portfolio value — drives the fan chart. */
   monthlyBands: MonteCarloMonthBand[];
+  /** Expected ending split across coins (means are additive to the portfolio mean). */
+  perCoinEnding: MonteCarloCoinBreakdown[];
   meanEndingValueLkr: number;
   /** Fraction of simulations ending below the amount invested. */
   probLoss: number;

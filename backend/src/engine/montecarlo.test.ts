@@ -119,6 +119,41 @@ describe("runMonteCarlo", () => {
     expect(result.monthlyBands[11]!.p50).toBeCloseTo(result.endingValueLkr.p50, 6);
   });
 
+  it("breaks the expected ending value down per coin (means are additive)", () => {
+    const plan: PlanInput = {
+      monthlyAmountLkr: 1000,
+      allocations: [
+        { coinId: 1, pct: 60 },
+        { coinId: 2, pct: 40 },
+      ],
+    };
+    const prices = [
+      ...[100, 130, 90, 150, 80, 170].map((p, i) => ({
+        coinId: 1,
+        date: `2020-${String(i + 1).padStart(2, "0")}-01`,
+        priceUsd: p,
+      })),
+      ...[50, 60, 45, 70, 40, 80].map((p, i) => ({
+        coinId: 2,
+        date: `2020-${String(i + 1).padStart(2, "0")}-01`,
+        priceUsd: p,
+      })),
+    ];
+    const fx = fxSeries(1, 6);
+
+    const result = runMonteCarlo(plan, prices, fx, { simulations: 1000, months: 12, seed: 3 });
+
+    expect(result.perCoinEnding).toHaveLength(2);
+    const sumMeans = result.perCoinEnding.reduce((s, c) => s + c.meanEndingValueLkr, 0);
+    // Per-coin means sum to the portfolio mean ending value.
+    expect(sumMeans).toBeCloseTo(result.meanEndingValueLkr, 4);
+    const sumWeights = result.perCoinEnding.reduce((s, c) => s + c.meanEndingWeightPct, 0);
+    expect(sumWeights).toBeCloseTo(100, 4);
+    // Invested split matches allocation: 60/40 of 12 * 1000.
+    expect(result.perCoinEnding.find((c) => c.coinId === 1)!.investedLkr).toBeCloseTo(7200, 6);
+    expect(result.perCoinEnding.find((c) => c.coinId === 2)!.investedLkr).toBeCloseTo(4800, 6);
+  });
+
   it("returns NaN bands when there is not enough history", () => {
     const prices = priceSeries(1, [100]);
     const fx = fxSeries(1, 1);

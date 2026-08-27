@@ -139,5 +139,29 @@ describe("runBacktest", () => {
     // Coin1: 500/100=5u/mo => 15u * 100 = 1500. Coin2: 500/50=10u/mo => 30u * 50 = 1500.
     expect(w.endingValueLkr).toBeCloseTo(3000, CLOSE);
     expect(w.roiPct).toBeCloseTo(0, CLOSE);
+
+    // Per-coin breakdown: each got 1500 invested, 1500 ending, 50% weight.
+    expect(w.perCoin).toHaveLength(2);
+    const c1 = w.perCoin.find((c) => c.coinId === 1)!;
+    const c2 = w.perCoin.find((c) => c.coinId === 2)!;
+    expect(c1.investedLkr).toBeCloseTo(1500, CLOSE);
+    expect(c1.endingUnits).toBeCloseTo(15, CLOSE);
+    expect(c1.endingValueLkr).toBeCloseTo(1500, CLOSE);
+    expect(c1.endingWeightPct).toBeCloseTo(50, CLOSE);
+    expect(c2.endingWeightPct).toBeCloseTo(50, CLOSE);
+    expect(c1.endingValueLkr + c2.endingValueLkr).toBeCloseTo(w.endingValueLkr, CLOSE);
+  });
+
+  it("exposes a median window with a date range", () => {
+    const plan: PlanInput = {
+      monthlyAmountLkr: 1000,
+      allocations: [{ coinId: 1, pct: 100 }],
+    };
+    const prices = priceSeries(1, [100, 100, 100, 100, 100]);
+    const fx = fxSeries(1, 5);
+    const { aggregate } = runBacktest(plan, prices, fx, { windowMonths: 3 });
+    expect(aggregate.median).not.toBeNull();
+    expect(aggregate.median!.startMonth).toMatch(/^\d{4}-\d{2}$/);
+    expect(aggregate.median!.roiPct).toBeCloseTo(aggregate.medianRoiPct, 6);
   });
 });

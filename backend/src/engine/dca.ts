@@ -1,7 +1,7 @@
 // The shared monthly DCA mechanic, used by both the backtest and Monte Carlo
 // engines so the buying logic is defined exactly once.
 
-import type { Allocation } from "./types.js";
+import type { Allocation, CoinBreakdown } from "./types.js";
 
 export interface DcaMonthValuation {
   /** Total invested up to and including this month (LKR). */
@@ -51,6 +51,34 @@ export function simulateDca(
   }
 
   return { valuations, holdings };
+}
+
+/**
+ * Per-coin holdings breakdown at the end of a run. Invested-per-coin is the
+ * plan's fixed allocation share applied over `months` purchases; ending value
+ * is the accumulated units valued at `finalPrices`.
+ */
+export function coinBreakdown(
+  monthlyAmountLkr: number,
+  allocations: Allocation[],
+  holdings: Map<number, number>,
+  finalPrices: Map<number, number>,
+  months: number,
+): CoinBreakdown[] {
+  const rows = allocations.map(({ coinId, pct }) => {
+    const endingUnits = holdings.get(coinId) ?? 0;
+    const price = finalPrices.get(coinId) ?? 0;
+    return {
+      coinId,
+      investedLkr: monthlyAmountLkr * (pct / 100) * months,
+      endingUnits,
+      endingValueLkr: endingUnits * price,
+      endingWeightPct: 0,
+    };
+  });
+  const total = rows.reduce((s, r) => s + r.endingValueLkr, 0);
+  for (const r of rows) r.endingWeightPct = total > 0 ? (r.endingValueLkr / total) * 100 : 0;
+  return rows;
 }
 
 /** Worst peak-to-trough decline across a value series, as a positive fraction. */

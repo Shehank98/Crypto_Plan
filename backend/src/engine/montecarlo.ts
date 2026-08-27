@@ -6,6 +6,7 @@ import { buildMonthlySeries, monthlyReturns } from "./series.js";
 import { mean, mulberry32, percentileBreakdown } from "./stats.js";
 import type {
   FxPoint,
+  MonteCarloCoinBreakdown,
   MonteCarloMonthBand,
   MonteCarloOptions,
   MonteCarloResult,
@@ -86,6 +87,7 @@ export function runMonteCarlo(
       endingValueLkr: zeros,
       roiPct: zeros,
       monthlyBands: [],
+      perCoinEnding: [],
       meanEndingValueLkr: NaN,
       probLoss: NaN,
     };
@@ -102,6 +104,9 @@ export function runMonteCarlo(
   // valuesByMonth[m] collects every simulation's portfolio value at month m,
   // so we can compute per-month percentile bands for the fan chart.
   const valuesByMonth: number[][] = Array.from({ length: months }, () => []);
+  // Running sum of each coin's ending value across sims (means are additive).
+  const coinEndingSum = new Map<number, number>();
+  for (const id of coinIds) coinEndingSum.set(id, 0);
 
   for (let s = 0; s < simulations; s++) {
     const path = bootstrapPath(coinIds, returns, months, blockSize, rng);
@@ -121,12 +126,18 @@ export function runMonteCarlo(
       monthlyPrices.push(monthMap);
     }
 
-    const { valuations } = simulateDca(
+    const { valuations, holdings } = simulateDca(
       plan.monthlyAmountLkr,
       plan.allocations,
       monthlyPrices,
     );
     for (let m = 0; m < months; m++) valuesByMonth[m]!.push(valuations[m]!.valueLkr);
+
+    const finalPrices = monthlyPrices[months - 1]!;
+    for (const id of coinIds) {
+      const units = holdings.get(id) ?? 0;
+      coinEndingSum.set(id, coinEndingSum.get(id)! + units * (finalPrices.get(id) ?? 0));
+    }
 
     const ending = valuations[valuations.length - 1]!.valueLkr;
     endingValues.push(ending);
@@ -140,6 +151,19 @@ export function runMonteCarlo(
     ...percentileBreakdown(values),
   }));
 
+  const pctByCoin = new Map(plan.allocations.map((a) => [a.coinId, a.pct]));
+  const meanEndingByCoin = coinIds.map((id) => ({
+    coinId: id,
+    meanEndingValueLkr: coinEndingSum.get(id)! / simulations,
+  }));
+  const totalMeanEnding = meanEndingByCoin.reduce((s, c) => s + c.meanEndingValueLkr, 0);
+  const perCoinEnding: MonteCarloCoinBreakdown[] = meanEndingByCoin.map((c) => ({
+    coinId: c.coinId,
+    investedLkr: plan.monthlyAmountLkr * ((pctByCoin.get(c.coinId) ?? 0) / 100) * months,
+    meanEndingValueLkr: c.meanEndingValueLkr,
+    meanEndingWeightPct: totalMeanEnding > 0 ? (c.meanEndingValueLkr / totalMeanEnding) * 100 : 0,
+  }));
+
   return {
     simulations,
     months,
@@ -147,6 +171,7 @@ export function runMonteCarlo(
     endingValueLkr: percentileBreakdown(endingValues),
     roiPct: percentileBreakdown(rois),
     monthlyBands,
+    perCoinEnding,
     meanEndingValueLkr: mean(endingValues),
     probLoss: lossCount / simulations,
   };

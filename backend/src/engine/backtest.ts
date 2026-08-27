@@ -1,9 +1,9 @@
 // Historical backtest: roll a fixed-length DCA window across all available
 // history and report per-window and aggregate statistics.
 
-import { maxDrawdown, simulateDca } from "./dca.js";
+import { coinBreakdown, maxDrawdown, simulateDca } from "./dca.js";
 import { buildMonthlySeries } from "./series.js";
-import { median, percentileBreakdown } from "./stats.js";
+import { median as medianOf, percentileBreakdown } from "./stats.js";
 import type {
   BacktestOptions,
   BacktestResult,
@@ -42,7 +42,7 @@ export function runBacktest(
   for (let start = 0; start + windowMonths <= series.length; start++) {
     const slice = series.slice(start, start + windowMonths);
     const monthlyPrices = slice.map((m) => m.priceLkr);
-    const { valuations } = simulateDca(
+    const { valuations, holdings } = simulateDca(
       plan.monthlyAmountLkr,
       plan.allocations,
       monthlyPrices,
@@ -57,6 +57,13 @@ export function runBacktest(
         ? 0
         : Math.pow(endingValueLkr / investedLkr, 1 / years) - 1;
     const dd = maxDrawdown(valuations.map((v) => v.valueLkr));
+    const perCoin = coinBreakdown(
+      plan.monthlyAmountLkr,
+      plan.allocations,
+      holdings,
+      slice[slice.length - 1]!.priceLkr,
+      windowMonths,
+    );
 
     windows.push({
       startMonth: slice[0]!.month,
@@ -66,6 +73,7 @@ export function runBacktest(
       roiPct,
       cagr,
       maxDrawdown: dd,
+      perCoin,
     });
   }
 
@@ -81,13 +89,21 @@ export function runBacktest(
     if (worst === null || w.roiPct < worst.roiPct) worst = w;
   }
 
+  // Representative middle scenario: the window sitting at the median ROI rank.
+  let median: BacktestWindow | null = null;
+  if (windows.length > 0) {
+    const byRoi = [...windows].sort((a, b) => a.roiPct - b.roiPct);
+    median = byRoi[Math.floor((byRoi.length - 1) / 2)]!;
+  }
+
   return {
     aggregate: {
       windowCount: windows.length,
       windowMonths,
       best,
       worst,
-      medianRoiPct: windows.length ? median(rois) : NaN,
+      median,
+      medianRoiPct: windows.length ? medianOf(rois) : NaN,
       roiPct: percentileBreakdown(rois),
       cagr: percentileBreakdown(cagrs),
       endingValueLkr: percentileBreakdown(endings),
