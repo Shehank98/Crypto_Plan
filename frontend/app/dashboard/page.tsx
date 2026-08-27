@@ -26,6 +26,7 @@ function Tracker() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -50,13 +51,41 @@ function Tracker() {
     setError(null);
     setFlash(null);
     try {
-      await apiFetch("/api/ingest/refresh", { method: "POST" });
+      await apiFetch("/api/ingest/refresh", { method: "POST", body: JSON.stringify({ mode: "incremental" }) });
       await refresh();
       setFlash("Prices updated to the latest available.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to refresh prices");
     } finally {
       setRefreshing(false);
+    }
+  }, [refresh]);
+
+  const loadHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    setError(null);
+    setFlash("Loading price history… this can take a few minutes. You can keep using the app.");
+    try {
+      await apiFetch("/api/ingest/refresh", {
+        method: "POST",
+        body: JSON.stringify({ mode: "backfill" }),
+      });
+      // Poll until the background backfill finishes.
+      for (let i = 0; i < 200; i++) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const s = await apiFetch<{ running: boolean; lastError: string | null }>("/api/ingest/status");
+        if (!s.running) {
+          if (s.lastError) throw new Error(s.lastError);
+          break;
+        }
+      }
+      await refresh();
+      setFlash("Price history loaded. You can now log purchases at past dates.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load price history");
+      setFlash(null);
+    } finally {
+      setLoadingHistory(false);
     }
   }, [refresh]);
 
@@ -81,8 +110,16 @@ function Tracker() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={loadHistory}
+            disabled={loadingHistory || refreshing || noCoins}
+            className="btn-secondary"
+            title="Pull full historical prices (one-time, takes a few minutes)"
+          >
+            {loadingHistory ? "Loading history…" : "⭳ Load price history"}
+          </button>
+          <button
             onClick={refreshPrices}
-            disabled={refreshing}
+            disabled={refreshing || loadingHistory || noCoins}
             className="btn-secondary"
             title="Pull the latest prices"
           >
@@ -99,8 +136,15 @@ function Tracker() {
 
       {noCoins && (
         <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">
-          No coins are set up yet. On the server run <code>npm run seed</code> and{" "}
-          <code>npm run ingest:backfill</code> to load coins and prices.
+          No coins are set up yet — this usually resolves on the next deploy (coins seed
+          automatically). If it persists, redeploy the service.
+        </div>
+      )}
+
+      {!noCoins && empty && (
+        <div className="rounded-lg bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+          <strong>First time?</strong> Click <strong>⭳ Load price history</strong> above to pull
+          historical prices (one-time, a few minutes), then log a purchase below.
         </div>
       )}
 

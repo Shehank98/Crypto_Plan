@@ -7,6 +7,9 @@ echo "==> Applying database migrations"
 cd /app/backend
 npx prisma migrate deploy
 
+echo "==> Seeding coins (idempotent)"
+node dist/scripts/seedCoins.js || echo "seed failed (continuing) — you can retry from the UI"
+
 echo "==> Starting API on 127.0.0.1:4000"
 API_PORT=4000 node dist/api/server.js &
 API_PID=$!

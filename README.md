@@ -99,11 +99,11 @@ URL** that serves both the pages and the API.
    automatically via the root `railway.json` (`builder: DOCKERFILE`).
 3. Add the env vars below, deploy, then **Generate Domain**. Open that URL — it serves the
    UI, and the UI talks to the API on the same domain under `/api`.
-4. **First run** (once the service is up): open a Railway shell on the service and seed +
-   backfill so there's history to simulate against:
-   ```bash
-   cd backend && npm run seed && npm run ingest:backfill
-   ```
+4. **First run**: coins **seed automatically** on every deploy (in `start.sh`), so no shell
+   is needed for that. To load historical prices, open the app → **Portfolio** →
+   **⭳ Load price history** (runs a one-time backfill in the background; a few minutes).
+   Thereafter **↻ Refresh prices** pulls the latest. (You can still run
+   `cd backend && npm run ingest:backfill` from a shell if you prefer.)
 
 ### Daily ingestion
 
