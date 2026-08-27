@@ -61,18 +61,18 @@ npm run dev                   # tsx watch, http://localhost:4000
 npm run build && npm start
 ```
 
-| Method | Route                  | Auth | Purpose                                   |
-|--------|------------------------|------|-------------------------------------------|
-| POST   | `/auth/register`       | –    | Create user, returns `{ user, token }`    |
-| POST   | `/auth/login`          | –    | Returns `{ user, token }`                 |
-| GET    | `/coins`               | –    | Supported coin universe (ids for plans)   |
-| GET    | `/plans`               | JWT  | List the user's plans                     |
-| POST   | `/plans`               | JWT  | Create a plan                             |
-| GET    | `/plans/:id`           | JWT  | Read a plan                               |
-| PUT    | `/plans/:id`           | JWT  | Update a plan                             |
-| DELETE | `/plans/:id`           | JWT  | Delete a plan                             |
-| POST   | `/plans/:id/simulate`  | JWT  | Run both engines, cache to `plan_results` |
-| GET    | `/plans/:id/results`   | JWT  | Latest cached results                     |
+| Method | Route                      | Auth | Purpose                                   |
+|--------|----------------------------|------|-------------------------------------------|
+| POST   | `/api/auth/register`       | –    | Create user, returns `{ user, token }`    |
+| POST   | `/api/auth/login`          | –    | Returns `{ user, token }`                 |
+| GET    | `/api/coins`               | –    | Supported coin universe (ids for plans)   |
+| GET    | `/api/plans`               | JWT  | List the user's plans                     |
+| POST   | `/api/plans`               | JWT  | Create a plan                             |
+| GET    | `/api/plans/:id`           | JWT  | Read a plan                               |
+| PUT    | `/api/plans/:id`           | JWT  | Update a plan                             |
+| DELETE | `/api/plans/:id`           | JWT  | Delete a plan                             |
+| POST   | `/api/plans/:id/simulate`  | JWT  | Run both engines, cache to `plan_results` |
+| GET    | `/api/plans/:id/results`   | JWT  | Latest cached results                     |
 
 Auth is `Authorization: Bearer <token>` (JWT, bcrypt-hashed passwords). Plan body:
 
@@ -80,6 +80,8 @@ Auth is `Authorization: Bearer <token>` (JWT, bcrypt-hashed passwords). Plan bod
 {
   "name": "My DCA",
   "monthlyAmountLkr": 50000,
+  "purchaseDayOfMonth": 1,
+  "startDate": "2023-01-01",
   "allocations": [{ "coinId": 1, "pct": 70 }, { "coinId": 2, "pct": 30 }]
 }
 ```
@@ -126,8 +128,10 @@ Run `npx tsx src/scripts/demoEngine.ts` to print live output. Shape:
     "aggregate": {
       "windowCount": 5,
       "windowMonths": 36,
-      "best":  { "startMonth": "2023-03", "endMonth": "2023-08", "investedLkr": 300000, "endingValueLkr": 363385.7, "roiPct": 21.13, "cagr": 0.467, "maxDrawdown": 0 },
-      "worst": { "startMonth": "2023-04", "endMonth": "2023-09", "investedLkr": 300000, "endingValueLkr": 307309.9, "roiPct": 2.44, "cagr": 0.049, "maxDrawdown": 0 },
+      // best/worst/median are full window objects (each with perCoin below).
+      "best":   { "startMonth": "2023-03", "endMonth": "2023-08", "investedLkr": 300000, "endingValueLkr": 363385.7, "roiPct": 21.13, "cagr": 0.467, "maxDrawdown": 0, "perCoin": [ /* … */ ] },
+      "worst":  { "startMonth": "2023-04", "endMonth": "2023-09", "…": "…" },
+      "median": { "startMonth": "2023-02", "endMonth": "2023-07", "…": "…" },
       "medianRoiPct": 14.37,
       "roiPct":         { "p5": 4.63,   "p25": 13.41,  "p50": 14.37,  "p75": 19.17,  "p95": 20.74 },
       "cagr":           { "p5": 0.097,  "p25": 0.286,  "p50": 0.308,  "p75": 0.420,  "p95": 0.458 },
@@ -135,7 +139,13 @@ Run `npx tsx src/scripts/demoEngine.ts` to print live output. Shape:
       "maxDrawdown":    { "p5": 0,      "p25": 0,      "p50": 0,      "p75": 0,      "p95": 0 }
     },
     "windows": [
-      { "startMonth": "2023-01", "endMonth": "2023-06", "investedLkr": 300000, "endingValueLkr": 340226.2, "roiPct": 13.41, "cagr": 0.286, "maxDrawdown": 0 }
+      {
+        "startMonth": "2023-01", "endMonth": "2023-06",
+        "investedLkr": 300000, "endingValueLkr": 340226.2, "roiPct": 13.41, "cagr": 0.286, "maxDrawdown": 0,
+        "perCoin": [
+          { "coinId": 1, "investedLkr": 210000, "endingUnits": 0.0123, "endingValueLkr": 238158, "endingWeightPct": 70.0 }
+        ]
+      }
       // ... one per rolling window
     ]
   },
@@ -145,15 +155,29 @@ Run `npx tsx src/scripts/demoEngine.ts` to print live output. Shape:
     "investedLkr": 300000,
     "endingValueLkr": { "p5": 307310, "p25": 307310, "p50": 343102, "p75": 357522, "p95": 363386 },
     "roiPct":         { "p5": 2.44,   "p25": 2.44,   "p50": 14.37,  "p75": 19.17,  "p95": 21.13 },
+    // One band per simulated month — drives the fan chart.
+    "monthlyBands": [
+      { "month": 1, "investedLkr": 50000, "p5": 50000, "p25": 50000, "p50": 50000, "p75": 50000, "p95": 50000 }
+      // ... months 2..36
+    ],
+    // Expected ending split per coin (means are additive to meanEndingValueLkr).
+    "perCoinEnding": [
+      { "coinId": 1, "investedLkr": 210000, "meanEndingValueLkr": 239699, "meanEndingWeightPct": 70.0 }
+    ],
     "meanEndingValueLkr": 342427.25,
     "probLoss": 0
-  }
+  },
+  "computedAt": "2026-08-27T…Z",
+  "cached": false
 }
 ```
 
 - `roiPct` is a percent (14.37 = +14.37%). `cagr` is a fraction (0.308 = 30.8%/yr).
   `maxDrawdown` is a positive fraction (0.30 = a 30% peak-to-trough fall). `probLoss` is
   the fraction of Monte Carlo paths ending below the amount invested.
-- All monetary values are LKR.
+- All monetary values are LKR. `GET /api/plans/:id/results` returns the same object with
+  `cached: true`.
 
-This is the shape the frontend (Recharts) will consume — worth reviewing before we build it.
+This is the shape the frontend (Recharts) consumes: summary cards, the `monthlyBands` fan
+chart, the `windows[]` distribution, the `perCoinEnding` split, and the best/median/worst
+scenario table.
