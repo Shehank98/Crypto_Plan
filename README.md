@@ -18,8 +18,15 @@ Greed, CoinDesk/Cointelegraph RSS, DefiLlama, ExchangeRate (USD→LKR).
   (1.3× dip / 1.0× baseline / 0.8× extended / 0.5× top with reserve diversion) and 3-tier
   Fibonacci support ladders for staggered limit buys.
 - **C — Dollar-cost selling:** 2×/3×/5× take-profit targets from VWAP with sell suggestions.
-- **D — Gemini analyst:** portfolio + Fear&Greed + SMA/Mayer/RSI + news + DefiLlama TVL →
-  structured JSON (`responseSchema`), stored in `ai_reports` to track accuracy over time.
+- **D — Gemini analyst:** portfolio + Fear&Greed + SMA/Mayer/RSI/MACD/Bollinger +
+  composite signals + risk + news + DefiLlama TVL → structured JSON (`responseSchema`),
+  stored in `ai_reports`. **Accuracy tracking** scores every past report against subsequent
+  price moves (overall hit-rate + per-action) using the saved `snapshot_json`.
+- **Professional decision support:** per-coin **composite signal score (0–100)** blending
+  Mayer, RSI, Bollinger %B, MACD and trend into a STRONG_ACCUMULATE…TAKE_PROFIT label;
+  plus **portfolio risk analytics** — annualized return/volatility, Sharpe, Sortino, max
+  drawdown, a **coin correlation matrix**, **inverse-volatility (risk-parity) target
+  weights** with rebalance actions, and per-coin **DCA discount** (price vs VWAP).
 - **E — Telegram bot:** `/start`, `/portfolio`, `/buy <sym> <lkr>`, `/analyst`, `/dca`.
   Every chat that messages the bot is remembered, so the **6-hour dip alerts** and
   **monthly auto-DCA summaries** broadcast to all of them (plus `TELEGRAM_CHAT_ID`).
@@ -64,6 +71,8 @@ This is one service built from the root `Dockerfile` (no monorepo, no Root Direc
 `/api/transactions` (GET/POST, `PUT|DELETE /:id`) · `POST /api/import` ·
 `GET /api/export?format=csv|json` · `/api/projection` · `/api/sentiment` · `/api/news` ·
 `/api/onchain` · `/api/analyst` (GET latest, POST to generate) · `/api/analyst/history` ·
+`/api/analyst/accuracy` (hit-rate of past recommendations) · `/api/analytics` (risk,
+correlation, risk-parity targets, rebalance, DCA discount) ·
 `POST /api/auto-dca` (run this month's Mayer-scaled DCA; `{"force":true}` to re-run).
 
 Log a purchase (price auto-fetched live if omitted):

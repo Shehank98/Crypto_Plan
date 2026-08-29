@@ -94,6 +94,87 @@ function fibLadder(closes) {
   return [0.382, 0.5, 0.618].map((lvl) => round(high - span * lvl, 2));
 }
 
+// --- Professional decision-support: extra indicators & a composite score ---
+function stddev(values) {
+  if (!values || values.length < 2) return null;
+  const m = values.reduce((a, b) => a + b, 0) / values.length;
+  return Math.sqrt(values.reduce((a, b) => a + (b - m) ** 2, 0) / values.length);
+}
+function dailyReturns(closes) {
+  const r = [];
+  for (let i = 1; i < (closes || []).length; i++) if (closes[i - 1] > 0) r.push(closes[i] / closes[i - 1] - 1);
+  return r;
+}
+function emaArray(values, period) {
+  if (!values || values.length < period) return [];
+  const k = 2 / (period + 1);
+  const out = new Array(values.length).fill(null);
+  let e = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  out[period - 1] = e;
+  for (let i = period; i < values.length; i++) {
+    e = values[i] * k + e * (1 - k);
+    out[i] = e;
+  }
+  return out;
+}
+function macd(closes, fast = 12, slow = 26, sig = 9) {
+  if (!closes || closes.length < slow + sig) return null;
+  const ef = emaArray(closes, fast);
+  const es = emaArray(closes, slow);
+  const line = [];
+  for (let i = 0; i < closes.length; i++) if (ef[i] != null && es[i] != null) line.push(ef[i] - es[i]);
+  const signal = emaArray(line, sig);
+  const macdVal = line[line.length - 1];
+  const sigVal = signal[signal.length - 1];
+  if (macdVal == null || sigVal == null) return null;
+  return { macd: macdVal, signal: sigVal, hist: macdVal - sigVal };
+}
+function bollinger(closes, period = 20, mult = 2) {
+  if (!closes || closes.length < period) return null;
+  const slice = closes.slice(-period);
+  const mid = slice.reduce((a, b) => a + b, 0) / period;
+  const sd = stddev(slice);
+  const upper = mid + mult * sd;
+  const lower = mid - mult * sd;
+  const price = closes[closes.length - 1];
+  const pctB = upper > lower ? (price - lower) / (upper - lower) : 0.5;
+  return { upper, lower, mid, pctB };
+}
+function annualizedVol(closes) {
+  const r = dailyReturns(closes);
+  const sd = stddev(r);
+  return sd == null ? null : sd * Math.sqrt(365);
+}
+function maxDrawdown(equity) {
+  let peak = -Infinity;
+  let mdd = 0;
+  for (const v of equity) {
+    if (v > peak) peak = v;
+    if (peak > 0) mdd = Math.max(mdd, (peak - v) / peak);
+  }
+  return mdd;
+}
+
+/**
+ * Composite 0–100 "accumulation attractiveness" score blending valuation
+ * (Mayer), momentum (RSI, MACD), mean-reversion (Bollinger %B) and trend
+ * (vs 200 SMA). Transparent, rules-based — surfaced and fed to the AI analyst.
+ */
+function compositeSignal({ mayer, rsi14, pctB, macdHist, price, sma200 }) {
+  const scoreMayer = mayer == null ? 50 : mayer < 0.8 ? 100 : mayer < 1.0 ? 82 : mayer <= 1.4 ? 58 : mayer <= 2.0 ? 30 : 10;
+  const scoreRsi = rsi14 == null ? 50 : rsi14 < 30 ? 90 : rsi14 < 45 ? 70 : rsi14 <= 55 ? 50 : rsi14 <= 70 ? 33 : 15;
+  const scoreB = pctB == null ? 50 : pctB < 0 ? 95 : pctB < 0.2 ? 85 : pctB < 0.5 ? 60 : pctB < 0.8 ? 40 : 20;
+  const scoreMacd = macdHist == null ? 50 : macdHist > 0 ? 62 : 42;
+  const scoreTrend = price == null || sma200 == null ? 50 : price < sma200 ? 68 : 45;
+  const weights = { scoreMayer: 0.34, scoreB: 0.22, scoreRsi: 0.2, scoreTrend: 0.14, scoreMacd: 0.1 };
+  const parts = { scoreMayer, scoreB, scoreRsi, scoreTrend, scoreMacd };
+  let score = 0;
+  for (const k of Object.keys(weights)) score += parts[k] * weights[k];
+  score = Math.round(score);
+  const label = score >= 75 ? "STRONG_ACCUMULATE" : score >= 60 ? "ACCUMULATE" : score >= 45 ? "NEUTRAL" : score >= 30 ? "REDUCE" : "TAKE_PROFIT";
+  return { score, label, components: parts };
+}
+
 // ----------------------------------------------------------------------------
 // Free data feeds (all defensive — return fallback/null on failure)
 // ----------------------------------------------------------------------------
@@ -248,6 +329,17 @@ async function refreshMarket() {
       const change24h = await get24hChange(sym);
       const mayer = spot && sma200 ? spot / sma200 : null;
       const ladderUsd = fibLadder(closes);
+      const macdV = macd(closes);
+      const boll = bollinger(closes);
+      const vol = annualizedVol(closes);
+      const signal = compositeSignal({
+        mayer,
+        rsi14,
+        pctB: boll ? boll.pctB : null,
+        macdHist: macdV ? macdV.hist : null,
+        price: spot,
+        sma200,
+      });
       MARKET.closes[sym] = closes;
       MARKET.coins[sym] = {
         symbol: sym,
@@ -259,7 +351,11 @@ async function refreshMarket() {
         rsi14: round(rsi14, 2),
         mayer: round(mayer, 4),
         change24h: round(change24h, 2),
+        macd: macdV ? { macd: round(macdV.macd, 4), signal: round(macdV.signal, 4), hist: round(macdV.hist, 4) } : null,
+        bollingerPctB: boll ? round(boll.pctB, 3) : null,
+        volatilityAnnPct: vol != null ? round(vol * 100, 1) : null,
         band: mayerBand(mayer),
+        signal,
         ladderUsd,
         ladderLkr: ladderUsd.map((p) => round(p * fx, 2)),
       };
@@ -501,6 +597,170 @@ function projectionBands(currentValueLkr) {
 }
 
 // ----------------------------------------------------------------------------
+// Professional analytics: portfolio risk, correlation, risk-parity targets,
+// rebalancing, DCA discount.
+// ----------------------------------------------------------------------------
+function pearson(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (n < 3) return null;
+  const x = a.slice(-n);
+  const y = b.slice(-n);
+  const mx = x.reduce((s, v) => s + v, 0) / n;
+  const my = y.reduce((s, v) => s + v, 0) / n;
+  let num = 0;
+  let dx = 0;
+  let dy = 0;
+  for (let i = 0; i < n; i++) {
+    num += (x[i] - mx) * (y[i] - my);
+    dx += (x[i] - mx) ** 2;
+    dy += (y[i] - my) ** 2;
+  }
+  return dx && dy ? num / Math.sqrt(dx * dy) : null;
+}
+
+function portfolioAnalytics(portfolio) {
+  const held = portfolio.holdings.filter((h) => !h.isReserve && h.valueLkr > 0);
+  const returnsBySym = {};
+  for (const s of COINS) {
+    const r = dailyReturns(MARKET.closes[s]);
+    if (r.length > 20) returnsBySym[s] = r;
+  }
+  const symbols = Object.keys(returnsBySym);
+
+  // Correlation matrix across all coins with data.
+  const correlation = { symbols, matrix: symbols.map((a) => symbols.map((b) => round(pearson(returnsBySym[a], returnsBySym[b]), 2))) };
+
+  // Value-weighted blended portfolio returns (held coins only).
+  const totalVal = held.reduce((s, h) => s + h.valueLkr, 0);
+  let risk = null;
+  if (held.length && totalVal > 0) {
+    const heldSyms = held.filter((h) => returnsBySym[h.symbol]).map((h) => h.symbol);
+    if (heldSyms.length) {
+      const n = Math.min(...heldSyms.map((s) => returnsBySym[s].length));
+      const blended = [];
+      for (let i = 0; i < n; i++) {
+        let r = 0;
+        for (const h of held) {
+          if (!returnsBySym[h.symbol]) continue;
+          const w = h.valueLkr / totalVal;
+          r += w * returnsBySym[h.symbol][returnsBySym[h.symbol].length - n + i];
+        }
+        blended.push(r);
+      }
+      const mean = blended.reduce((s, v) => s + v, 0) / blended.length;
+      const sd = stddev(blended);
+      const downside = stddev(blended.filter((v) => v < 0)) || 0;
+      const annReturn = mean * 365;
+      const annVol = sd * Math.sqrt(365);
+      let eq = 1;
+      const curve = blended.map((r) => (eq *= 1 + r));
+      risk = {
+        annualizedReturnPct: round(annReturn * 100, 1),
+        annualizedVolPct: round(annVol * 100, 1),
+        sharpe: annVol ? round(annReturn / annVol, 2) : null,
+        sortino: downside ? round(annReturn / (downside * Math.sqrt(365)), 2) : null,
+        maxDrawdownPct: round(maxDrawdown(curve) * 100, 1),
+        windowDays: blended.length,
+      };
+    }
+  }
+
+  // Inverse-volatility (risk-parity) target weights across all coins.
+  const vols = {};
+  for (const s of COINS) {
+    const v = annualizedVol(MARKET.closes[s]);
+    if (v && v > 0) vols[s] = v;
+  }
+  const invSum = Object.values(vols).reduce((s, v) => s + 1 / v, 0);
+  const targets = {};
+  for (const s of Object.keys(vols)) targets[s] = round((1 / vols[s] / invSum) * 100, 1);
+
+  // Rebalance suggestion vs current value weights.
+  const rebalance = held.map((h) => {
+    const targetPct = targets[h.symbol] ?? null;
+    const curPct = totalVal > 0 ? (h.valueLkr / totalVal) * 100 : 0;
+    const targetVal = targetPct != null ? (targetPct / 100) * totalVal : null;
+    const deltaLkr = targetVal != null ? targetVal - h.valueLkr : null;
+    return {
+      symbol: h.symbol,
+      currentPct: round(curPct, 1),
+      targetPct,
+      action: deltaLkr == null ? "—" : deltaLkr > totalVal * 0.03 ? "BUY" : deltaLkr < -totalVal * 0.03 ? "TRIM" : "HOLD",
+      deltaLkr: round(deltaLkr, 0),
+    };
+  });
+
+  // DCA discount: current price vs VWAP (negative = you're buying below cost).
+  const dcaDiscount = held.map((h) => ({
+    symbol: h.symbol,
+    vwapLkr: h.vwapLkr,
+    priceLkr: h.priceLkr,
+    discountPct: h.priceLkr != null && h.vwapLkr > 0 ? round(((h.priceLkr - h.vwapLkr) / h.vwapLkr) * 100, 2) : null,
+  }));
+
+  return { risk, correlation, targetWeights: targets, rebalance, dcaDiscount };
+}
+
+// ----------------------------------------------------------------------------
+// Analyst accuracy: score each stored report against subsequent price moves.
+// ----------------------------------------------------------------------------
+function scoreAction(action, changePct) {
+  const a = String(action || "").toUpperCase();
+  if (changePct == null) return null;
+  if (["STRONG_BUY", "ACCUMULATE", "STRONG_ACCUMULATE", "BUY"].includes(a)) return changePct > 0;
+  if (["TAKE_PROFIT", "REDUCE", "SELL"].includes(a)) return changePct <= 0;
+  return Math.abs(changePct) < 5; // HOLD / NEUTRAL — correct if roughly flat
+}
+
+async function analystAccuracy() {
+  const { rows } = await db.query(
+    "SELECT id, report_json, snapshot_json, source, created_at FROM ai_reports WHERE snapshot_json IS NOT NULL ORDER BY created_at DESC LIMIT 100",
+  );
+  const reports = [];
+  const byAction = {};
+  let totHits = 0;
+  let totScored = 0;
+  for (const row of rows) {
+    const rep = row.report_json;
+    const snap = row.snapshot_json;
+    const details = [];
+    for (const al of rep.allocations || []) {
+      const past = snap.prices && snap.prices[al.symbol] ? snap.prices[al.symbol].spotUsd : null;
+      const now = MARKET.coins[al.symbol] ? MARKET.coins[al.symbol].spotUsd : null;
+      if (past == null || now == null) continue;
+      const changePct = round(((now - past) / past) * 100, 2);
+      const hit = scoreAction(al.action, changePct);
+      if (hit == null) continue;
+      details.push({ symbol: al.symbol, action: al.action, pastUsd: past, nowUsd: now, changePct, hit });
+      byAction[al.action] = byAction[al.action] || { n: 0, hits: 0 };
+      byAction[al.action].n += 1;
+      if (hit) byAction[al.action].hits += 1;
+      totScored += 1;
+      if (hit) totHits += 1;
+    }
+    if (details.length) {
+      const hits = details.filter((d) => d.hit).length;
+      reports.push({
+        id: row.id,
+        source: row.source,
+        created_at: row.created_at,
+        horizonDays: round((Date.now() - new Date(row.created_at).getTime()) / 86400000, 1),
+        scored: details.length,
+        hits,
+        accuracyPct: round((hits / details.length) * 100, 1),
+        details,
+      });
+    }
+  }
+  const byActionOut = {};
+  for (const k of Object.keys(byAction)) byActionOut[k] = { n: byAction[k].n, hitRatePct: round((byAction[k].hits / byAction[k].n) * 100, 1) };
+  return {
+    aggregate: { reportsScored: reports.length, decisionsScored: totScored, overallAccuracyPct: totScored ? round((totHits / totScored) * 100, 1) : null, byAction: byActionOut },
+    reports,
+  };
+}
+
+// ----------------------------------------------------------------------------
 // Module D: Gemini analyst (+ rule-based fallback), stored in ai_reports
 // ----------------------------------------------------------------------------
 function buildAnalystContext(portfolio, onchain, news) {
@@ -515,8 +775,27 @@ function buildAnalystContext(portfolio, onchain, news) {
     fearGreed: MARKET.fearGreed,
     indicators: COINS.map((s) => {
       const c = MARKET.coins[s] || {};
-      return { symbol: s, price: c.spotUsd, sma200: c.sma200, mayer: c.mayer, rsi14: c.rsi14, change24h: c.change24h };
+      return {
+        symbol: s,
+        price: c.spotUsd,
+        sma200: c.sma200,
+        mayer: c.mayer,
+        rsi14: c.rsi14,
+        macdHist: c.macd ? c.macd.hist : null,
+        bollingerPctB: c.bollingerPctB,
+        volatilityAnnPct: c.volatilityAnnPct,
+        change24h: c.change24h,
+        signalScore: c.signal ? c.signal.score : null,
+        signalLabel: c.signal ? c.signal.label : null,
+      };
     }),
+    risk: (() => {
+      try {
+        return portfolioAnalytics(portfolio).risk;
+      } catch (e) {
+        return null;
+      }
+    })(),
     onchain,
     news: (news || []).slice(0, 6).map((n) => n.title),
     monthlyBudgetLkr: MONTHLY_LKR,
@@ -527,20 +806,21 @@ function ruleBasedAnalyst(ctx) {
   const fg = ctx.fearGreed.value;
   const risk = fg == null ? "MODERATE" : fg < 25 ? "LOW" : fg < 55 ? "MODERATE" : fg < 80 ? "HIGH" : "EXTREME";
   const base = MONTHLY_LKR / COINS.length;
+  // Map composite signal → allowed action enum; size by the score around the base.
+  const LABEL_TO_ACTION = { STRONG_ACCUMULATE: "STRONG_BUY", ACCUMULATE: "ACCUMULATE", NEUTRAL: "HOLD", REDUCE: "TAKE_PROFIT", TAKE_PROFIT: "TAKE_PROFIT" };
   const allocations = ctx.indicators.map((ind) => {
     const band = mayerBand(ind.mayer);
-    const suggested = Math.round(base * band.multiplier);
-    let action = "HOLD";
-    if (ind.mayer != null && ind.mayer < 0.8) action = "STRONG_BUY";
-    else if (ind.mayer != null && ind.mayer <= 1.4) action = "ACCUMULATE";
-    else if (ind.mayer != null && ind.mayer > 2.0) action = "TAKE_PROFIT";
+    // Blend Mayer multiplier with the composite score for position sizing.
+    const scoreMult = ind.signalScore != null ? 0.5 + ind.signalScore / 100 : 1; // 0.5x–1.5x
+    const suggested = Math.max(0, Math.round(base * ((band.multiplier + scoreMult) / 2)));
+    const action = LABEL_TO_ACTION[ind.signalLabel] || (ind.mayer != null && ind.mayer < 0.8 ? "STRONG_BUY" : "HOLD");
     const ladder = (MARKET.coins[ind.symbol] || {}).ladderUsd || [];
     return {
       symbol: ind.symbol,
       suggested_lkr: suggested,
       action,
       ladder_entry_prices_usd: ladder,
-      reasoning: `Mayer ${ind.mayer ?? "n/a"} (${band.label}), RSI ${ind.rsi14 ?? "n/a"}, 24h ${ind.change24h ?? "n/a"}%.`,
+      reasoning: `Signal ${ind.signalScore ?? "n/a"}/100 (${ind.signalLabel ?? "n/a"}); Mayer ${ind.mayer ?? "n/a"} (${band.label}), RSI ${ind.rsi14 ?? "n/a"}, %B ${ind.bollingerPctB ?? "n/a"}, MACD ${ind.macdHist ?? "n/a"}.`,
     };
   });
   return {
@@ -835,6 +1115,13 @@ app.post("/api/analyst", wrap(async (_req, res) => res.json(await runAnalyst(tru
 // Manually trigger this month's auto-DCA (force=true re-runs even if already done).
 app.post("/api/auto-dca", wrap(async (req, res) => res.json(await runAutoDca(req.body && req.body.force === true))));
 
+app.get("/api/analytics", wrap(async (_req, res) => {
+  const p = await computePortfolio();
+  res.json(portfolioAnalytics(p));
+}));
+
+app.get("/api/analyst/accuracy", wrap(async (_req, res) => res.json(await analystAccuracy())));
+
 app.get("/api/analyst/history", wrap(async (_req, res) => {
   const { rows } = await db.query("SELECT id, report_json, source, created_at FROM ai_reports ORDER BY created_at DESC LIMIT 20");
   res.json({ reports: rows });
@@ -1012,6 +1299,8 @@ async function boot() {
   startCron();
 }
 
-boot();
+if (require.main === module) boot();
 
 module.exports = app;
+// Exposed for unit testing of the pure decision-support math.
+module.exports._test = { macd, bollinger, annualizedVol, compositeSignal, pearson, scoreAction, maxDrawdown, mayerBand };

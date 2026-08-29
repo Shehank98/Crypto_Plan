@@ -97,25 +97,84 @@ function renderBands(b) {
   });
 }
 
+const SIGNAL_COLORS = { STRONG_ACCUMULATE: "text-emerald-400", ACCUMULATE: "text-emerald-300", NEUTRAL: "text-slate-300", REDUCE: "text-amber-400", TAKE_PROFIT: "text-rose-400" };
 function renderLadder(alloc, coins) {
   const rows = alloc.perCoin
     .map((c) => {
       const m = coins[c.symbol] || {};
+      const sig = m.signal || {};
       const ladder = (c.ladderLkr || []).map((p) => `<span class="pill bg-slate-800 text-slate-300">${fmtLkr(p)}</span>`).join(" ");
-      const bandColor = c.multiplier > 1 ? "text-emerald-400" : c.multiplier < 1 ? "text-amber-400" : "text-slate-300";
       return `<tr class="border-b border-edge/60">
         <td class="py-2 font-semibold" style="color:${COIN_COLORS[c.symbol]}">${c.symbol}</td>
         <td class="py-2 text-right">${m.mayer ?? "—"}</td>
-        <td class="py-2 ${bandColor}">${c.band}</td>
+        <td class="py-2 text-right">${m.rsi14 ?? "—"}</td>
+        <td class="py-2 text-center"><span class="font-bold ${SIGNAL_COLORS[sig.label] || "text-slate-300"}">${sig.score ?? "—"}</span><br><span class="text-[10px] ${SIGNAL_COLORS[sig.label] || "text-slate-400"}">${(sig.label || "").replace("_", " ")}</span></td>
         <td class="py-2 text-right font-medium">${fmtLkr(c.suggestedLkr)}</td>
         <td class="py-2">${ladder || "—"}</td></tr>`;
     })
     .join("");
   $("ladder").innerHTML =
     `<thead><tr class="text-left text-xs uppercase text-slate-500">
-      <th class="py-1">Coin</th><th class="py-1 text-right">Mayer</th><th class="py-1">Band</th><th class="py-1 text-right">Suggested</th><th class="py-1">Ladder buys</th>
+      <th class="py-1">Coin</th><th class="py-1 text-right">Mayer</th><th class="py-1 text-right">RSI</th><th class="py-1 text-center">Signal</th><th class="py-1 text-right">Suggested</th><th class="py-1">Ladder</th>
     </tr></thead><tbody>${rows}</tbody>` +
-    (alloc.reserveDivertLkr ? `<tfoot><tr><td colspan="5" class="pt-2 text-xs text-amber-400">↪ Divert ${fmtLkr(alloc.reserveDivertLkr)} to USDT/USDC reserve</td></tr></tfoot>` : "");
+    (alloc.reserveDivertLkr ? `<tfoot><tr><td colspan="6" class="pt-2 text-xs text-amber-400">↪ Divert ${fmtLkr(alloc.reserveDivertLkr)} to USDT/USDC reserve</td></tr></tfoot>` : "");
+}
+
+function renderAccuracy(acc) {
+  if (!acc || !acc.aggregate || acc.aggregate.overallAccuracyPct == null) {
+    $("accuracy").innerHTML = "Analyst accuracy: not enough history yet (needs past reports + price movement).";
+    return;
+  }
+  const a = acc.aggregate;
+  const byAction = Object.entries(a.byAction || {})
+    .map(([k, v]) => `<span class="pill bg-slate-800">${k.replace("_", " ")}: ${v.hitRatePct}% (${v.n})</span>`)
+    .join(" ");
+  const pct = a.overallAccuracyPct;
+  const col = pct >= 60 ? "text-emerald-400" : pct >= 45 ? "text-sky-400" : "text-rose-400";
+  $("accuracy").innerHTML = `📈 <b>Analyst accuracy: <span class="${col}">${pct}%</span></b> across ${a.reportsScored} reports (${a.decisionsScored} calls)<br><span class="mt-1 inline-block">${byAction}</span>`;
+}
+
+function renderAnalytics(an) {
+  if (!an) return;
+  // Risk metrics
+  const r = an.risk;
+  if (r) {
+    const item = (label, val, good) => `<div class="rounded-lg border border-edge bg-ink/50 p-2"><p class="text-[11px] text-slate-500">${label}</p><p class="text-base font-semibold ${good || "text-slate-100"}">${val}</p></div>`;
+    $("risk").innerHTML =
+      item("Ann. Return", (r.annualizedReturnPct ?? "—") + "%", r.annualizedReturnPct >= 0 ? "text-emerald-400" : "text-rose-400") +
+      item("Ann. Volatility", (r.annualizedVolPct ?? "—") + "%") +
+      item("Sharpe", r.sharpe ?? "—", r.sharpe >= 1 ? "text-emerald-400" : r.sharpe >= 0 ? "text-sky-400" : "text-rose-400") +
+      item("Sortino", r.sortino ?? "—") +
+      item("Max Drawdown", "-" + (r.maxDrawdownPct ?? "—") + "%", "text-rose-400") +
+      item("Window", (r.windowDays ?? "—") + "d");
+  } else {
+    $("risk").innerHTML = '<p class="col-span-2 text-slate-500">Add holdings + let prices load to compute risk.</p>';
+  }
+  // Rebalance
+  const rb = an.rebalance || [];
+  $("rebalance").innerHTML = rb.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th class="py-1">Coin</th><th class="py-1 text-right">Now</th><th class="py-1 text-right">Target</th><th class="py-1 text-right">Action</th></tr></thead><tbody>${rb
+        .map((x) => {
+          const ac = x.action === "BUY" ? "text-emerald-400" : x.action === "TRIM" ? "text-rose-400" : "text-slate-400";
+          return `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold" style="color:${COIN_COLORS[x.symbol]}">${x.symbol}</td><td class="py-1.5 text-right">${x.currentPct}%</td><td class="py-1.5 text-right">${x.targetPct ?? "—"}%</td><td class="py-1.5 text-right ${ac}">${x.action} ${x.deltaLkr ? fmtLkr(Math.abs(x.deltaLkr)) : ""}</td></tr>`;
+        })
+        .join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">Inverse-volatility targets appear once holdings load.</td></tr></tbody>';
+  // Correlation heatmap
+  const c = an.correlation || { symbols: [], matrix: [] };
+  if (c.symbols.length) {
+    const head = `<tr><th></th>${c.symbols.map((s) => `<th class="p-1">${s}</th>`).join("")}</tr>`;
+    const body = c.matrix
+      .map((row, i) => `<tr><th class="p-1 text-right">${c.symbols[i]}</th>${row.map((v) => {
+        const val = v == null ? "—" : v.toFixed(2);
+        const bg = v == null ? "transparent" : v > 0 ? `rgba(34,197,94,${Math.abs(v) * 0.5})` : `rgba(244,63,94,${Math.abs(v) * 0.5})`;
+        return `<td class="p-1" style="background:${bg}">${val}</td>`;
+      }).join("")}</tr>`)
+      .join("");
+    $("correlation").innerHTML = head + body;
+  } else {
+    $("correlation").innerHTML = '<tbody><tr><td class="py-3 text-slate-500">Loads with market data.</td></tr></tbody>';
+  }
 }
 
 function renderAnalyst(r, source) {
@@ -180,13 +239,15 @@ function renderNews(items) {
 // ---------- loaders ----------
 async function loadAll() {
   try {
-    const [market, portfolio, projection, analyst, txs, news] = await Promise.all([
+    const [market, portfolio, projection, analyst, txs, news, analytics, accuracy] = await Promise.all([
       api("/api/market"),
       api("/api/portfolio"),
       api("/api/projection"),
       api("/api/analyst"),
       api("/api/transactions"),
       api("/api/news").catch(() => ({ items: [] })),
+      api("/api/analytics").catch(() => null),
+      api("/api/analyst/accuracy").catch(() => null),
     ]);
     renderStats(portfolio);
     renderDonut(portfolio.holdings);
@@ -194,6 +255,8 @@ async function loadAll() {
     renderBands(projection.bands);
     renderLadder(market.allocation, market.coins);
     renderAnalyst(analyst.report, analyst.source);
+    renderAccuracy(accuracy);
+    renderAnalytics(analytics);
     renderTx(txs.transactions);
     renderNews(news.items || []);
     const fg = market.fearGreed || {};
