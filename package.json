@@ -1,14 +1,24 @@
 {
-  "name": "crypto-dca-planner",
-  "version": "0.1.0",
+  "name": "crypto-dca-engine",
+  "version": "1.0.0",
   "private": true,
-  "description": "Monorepo root. Single Railway service builds/runs both the API and the Next.js UI (see Dockerfile).",
+  "description": "Crypto DCA & Intelligent Portfolio Engine — monolithic Express server + PostgreSQL + vanilla dashboard.",
+  "main": "server.js",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "install:all": "cd backend && npm install && cd ../frontend && npm install",
-    "dev:api": "cd backend && npm run dev",
-    "dev:web": "cd frontend && npm run dev"
+    "start": "node server.js",
+    "init-db": "node -e \"require('./server.js')\""
+  },
+  "dependencies": {
+    "@google/genai": "^2.19.0",
+    "axios": "^1.20.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2",
+    "node-cron": "^4.6.0",
+    "node-telegram-bot-api": "^0.66.0",
+    "pg": "^8.23.0",
+    "rss-parser": "^3.13.0"
   }
 }

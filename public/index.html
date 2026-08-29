@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crypto DCA Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = { theme: { extend: { colors: { ink: "#0b0e14", panel: "#131722", edge: "#1e2532" } } } };
+  </script>
+  <style>
+    body { background: radial-gradient(1200px 600px at 20% -10%, #16203a 0%, #0b0e14 55%); }
+    .glow { box-shadow: 0 0 0 1px rgba(99,102,241,.15), 0 8px 40px -12px rgba(56,189,248,.25); }
+    .card { background: rgba(19,23,34,.85); border: 1px solid #1e2532; border-radius: 16px; }
+    .accent { color: #818cf8; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background:#273043; border-radius: 8px; }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  </style>
+</head>
+<body class="min-h-screen text-slate-200">
+  <div class="mx-auto max-w-7xl px-4 py-6">
+    <!-- Header -->
+    <header class="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold text-white">⚡ Crypto DCA <span class="accent">Engine</span></h1>
+        <p class="text-sm text-slate-400">Intelligent multi-currency DCA · VWAP · Mayer scaler · AI analyst</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="fg-pill" class="pill bg-slate-700 text-slate-200">Fear &amp; Greed: —</span>
+        <button id="btn-refresh" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">↻ Refresh</button>
+        <button id="btn-log" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">+ Log purchase</button>
+      </div>
+    </header>
+
+    <!-- Stat cards -->
+    <section id="stats" class="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4"></section>
+
+    <!-- Charts row -->
+    <section class="mb-6 grid gap-4 lg:grid-cols-3">
+      <div class="card glow p-4">
+        <h2 class="mb-2 text-sm font-semibold text-slate-300">Allocation</h2>
+        <canvas id="donut" height="220"></canvas>
+      </div>
+      <div class="card glow p-4 lg:col-span-2">
+        <h2 class="mb-2 text-sm font-semibold text-slate-300">DCA vs. Lump Sum</h2>
+        <canvas id="dcaLump" height="220"></canvas>
+      </div>
+    </section>
+
+    <section class="mb-6 card glow p-4">
+      <h2 class="mb-2 text-sm font-semibold text-slate-300">3-Year Projection Bands</h2>
+      <canvas id="bands" height="120"></canvas>
+    </section>
+
+    <!-- AI + Ladder -->
+    <section class="mb-6 grid gap-4 lg:grid-cols-2">
+      <div class="card glow p-4">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-300">🧠 AI Analyst</h2>
+          <button id="btn-analyst" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-xs hover:bg-edge">Run analyst</button>
+        </div>
+        <div id="analyst" class="text-sm text-slate-300">Loading…</div>
+      </div>
+      <div class="card glow p-4">
+        <h2 class="mb-2 text-sm font-semibold text-slate-300">🪜 Ladder Buy Matrix</h2>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="ladder"></table></div>
+      </div>
+    </section>
+
+    <!-- News -->
+    <section class="mb-6 card glow p-4">
+      <h2 class="mb-2 text-sm font-semibold text-slate-300">📰 Headlines</h2>
+      <ul id="news" class="grid gap-1 text-sm md:grid-cols-2"></ul>
+    </section>
+
+    <!-- Transactions -->
+    <section class="card glow p-4">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-sm font-semibold text-slate-300">Transactions</h2>
+        <div class="flex items-center gap-2 text-xs">
+          <a class="rounded-lg border border-edge bg-panel px-3 py-1.5 hover:bg-edge" href="/api/export?format=csv">Export CSV</a>
+          <a class="rounded-lg border border-edge bg-panel px-3 py-1.5 hover:bg-edge" href="/api/export?format=json">Export JSON</a>
+          <button id="btn-import" class="rounded-lg border border-edge bg-panel px-3 py-1.5 hover:bg-edge">Import</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-sm" id="txtable"></table></div>
+    </section>
+
+    <p class="mt-6 text-center text-xs text-slate-500">Free data: Binance · CoinGecko · Alternative.me · DefiLlama · RSS. Not financial advice.</p>
+  </div>
+
+  <!-- Log purchase modal -->
+  <div id="modal" class="fixed inset-0 z-40 hidden items-center justify-center bg-black/60 p-4">
+    <div class="card glow w-full max-w-md p-5">
+      <h3 class="mb-3 text-lg font-semibold text-white" id="modal-title">Log purchase</h3>
+      <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <label class="text-xs text-slate-400">Coin
+            <select id="f-symbol" class="mt-1 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm"></select>
+          </label>
+          <label class="text-xs text-slate-400">Side
+            <select id="f-side" class="mt-1 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm">
+              <option value="BUY">BUY</option><option value="SELL">SELL</option>
+            </select>
+          </label>
+        </div>
+        <label class="block text-xs text-slate-400">Amount (LKR)
+          <input id="f-amount" type="number" min="1" value="2500" class="mt-1 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm" />
+        </label>
+        <label class="block text-xs text-slate-400">Price override (LKR, optional)
+          <input id="f-price" type="number" min="0" placeholder="auto-fetch live price" class="mt-1 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm" />
+        </label>
+        <p id="modal-msg" class="text-xs"></p>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="modal-cancel" class="rounded-lg border border-edge px-4 py-2 text-sm">Cancel</button>
+        <button id="modal-save" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import modal -->
+  <div id="import-modal" class="fixed inset-0 z-40 hidden items-center justify-center bg-black/60 p-4">
+    <div class="card glow w-full max-w-lg p-5">
+      <h3 class="mb-2 text-lg font-semibold text-white">Import transactions</h3>
+      <p class="mb-2 text-xs text-slate-400">Paste a JSON array or CSV (header: symbol,side,amount_lkr,units,price_lkr,fee_lkr,note).</p>
+      <textarea id="import-text" rows="8" class="w-full rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs"></textarea>
+      <div class="mt-3 flex items-center justify-between">
+        <label class="text-xs text-slate-400">Format
+          <select id="import-format" class="ml-2 rounded-lg border border-edge bg-ink px-2 py-1 text-sm">
+            <option value="json">JSON</option><option value="csv">CSV</option>
+          </select>
+        </label>
+        <div class="flex gap-2">
+          <button id="import-cancel" class="rounded-lg border border-edge px-4 py-2 text-sm">Cancel</button>
+          <button id="import-save" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">Import</button>
+        </div>
+      </div>
+      <p id="import-msg" class="mt-2 text-xs"></p>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
