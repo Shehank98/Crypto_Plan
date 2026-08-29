@@ -38,6 +38,7 @@ function renderStats(p) {
 }
 
 function renderDonut(holdings) {
+  if (typeof Chart === "undefined") return;
   const data = holdings.filter((h) => h.valueLkr > 0);
   const ctx = $("donut");
   if (charts.donut) charts.donut.destroy();
@@ -65,6 +66,7 @@ function baseLineOpts(y2) {
 }
 
 function renderDcaLump(d) {
+  if (typeof Chart === "undefined") return;
   const ctx = $("dcaLump");
   if (charts.dcaLump) charts.dcaLump.destroy();
   charts.dcaLump = new Chart(ctx, {
@@ -81,6 +83,7 @@ function renderDcaLump(d) {
 }
 
 function renderBands(b) {
+  if (typeof Chart === "undefined") return;
   const ctx = $("bands");
   if (charts.bands) charts.bands.destroy();
   charts.bands = new Chart(ctx, {
@@ -249,16 +252,17 @@ async function loadAll() {
       api("/api/analytics").catch(() => null),
       api("/api/analyst/accuracy").catch(() => null),
     ]);
-    renderStats(portfolio);
-    renderDonut(portfolio.holdings);
-    renderDcaLump(projection.dcaVsLump);
-    renderBands(projection.bands);
-    renderLadder(market.allocation, market.coins);
-    renderAnalyst(analyst.report, analyst.source);
-    renderAccuracy(accuracy);
-    renderAnalytics(analytics);
-    renderTx(txs.transactions);
-    renderNews(news.items || []);
+    const safe = (fn) => { try { fn(); } catch (e) { console.error(e); } };
+    safe(() => renderStats(portfolio));
+    safe(() => renderDonut(portfolio.holdings));
+    safe(() => renderDcaLump(projection.dcaVsLump));
+    safe(() => renderBands(projection.bands));
+    safe(() => renderLadder(market.allocation, market.coins));
+    safe(() => renderAnalyst(analyst.report, analyst.source));
+    safe(() => renderAccuracy(accuracy));
+    safe(() => renderAnalytics(analytics));
+    safe(() => renderTx(txs.transactions));
+    safe(() => renderNews(news.items || []));
     const fg = market.fearGreed || {};
     $("fg-pill").textContent = `Fear & Greed: ${fg.value ?? "—"} ${fg.classification ? "(" + fg.classification + ")" : ""}`;
   } catch (e) {
