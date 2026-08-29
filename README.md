@@ -42,15 +42,23 @@ This is one service built from the root `Dockerfile` (no monorepo, no Root Direc
 
 1. **Create the project** from this repo. Add the **PostgreSQL** plugin (exposes `DATABASE_URL`).
 2. **Service → Variables:**
-   | Variable | Required | Notes |
-   |---|---|---|
-   | `DATABASE_URL` | ✅ | Reference the plugin: `${{Postgres.DATABASE_URL}}` |
-   | `GEMINI_API_KEY` | optional | Enables the real Gemini 2.5 Flash analyst; omit for the rule-based one |
-   | `TELEGRAM_BOT_TOKEN` | optional | From @BotFather; enables the bot (polling) |
-   | `TELEGRAM_CHAT_ID` | optional | Chat/channel id for the 6-hour dip alerts |
-   | `MONTHLY_BUDGET_LKR` | optional | Default `10000` |
-   | `DCA_DAY_OF_MONTH` | optional | Default `1` |
-   | `FALLBACK_USD_LKR` | optional | Used only if the FX API is unreachable (default `300`) |
+   | Variable | Required | Default | Notes |
+   |---|---|---|---|
+   | `DATABASE_URL` | ✅ **required** | — | Reference the plugin: `${{Postgres.DATABASE_URL}}` |
+   | `GEMINI_API_KEY` | optional | — | The only paid key. Enables the real Gemini 2.5 Flash analyst; omit → rule-based analyst |
+   | `TELEGRAM_BOT_TOKEN` | optional | — | From @BotFather; enables the bot (polling) |
+   | `TELEGRAM_CHAT_ID` | optional | — | Extra chat/channel id for alerts (chats that message the bot are auto-added) |
+   | `COINS` | optional | `BTC,ETH,SOL,BNB` | **Comma-separated symbols — add as many coins as you want** (Binance `<SYM>USDT`) |
+   | `COIN_IDS` | optional | — | JSON to extend the symbol→CoinGecko-id map for coins outside the built-in list |
+   | `HISTORY_YEARS` | optional | `5` | Years of history analysed for the backtest (try `10`) |
+   | `PROJECTION_YEARS` | optional | `3` | Forward projection horizon in years |
+   | `MONTHLY_BUDGET_LKR` | optional | `10000` | Monthly DCA budget |
+   | `DCA_DAY_OF_MONTH` | optional | `1` | Day auto-DCA runs |
+   | `AUTO_DCA` | optional | `true` | `false` to disable the automatic monthly buys |
+   | `FALLBACK_USD_LKR` | optional | `300` | Used only if the FX API is unreachable |
+   | `PORT` | optional | injected | Railway sets this automatically |
+
+   **The only variable you must set is `DATABASE_URL`.** Everything else has sensible defaults.
 3. **Deploy.** On boot the server auto-applies `schema.sql` (idempotent — no manual step),
    warms the market cache, starts the cron jobs, and (if a token is set) the Telegram bot.
 4. **Generate a domain** and open it — the dashboard is served at `/`.

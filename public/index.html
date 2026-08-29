@@ -43,14 +43,20 @@
         <canvas id="donut" height="220"></canvas>
       </div>
       <div class="card glow p-4 lg:col-span-2">
-        <h2 class="mb-2 text-sm font-semibold text-slate-300">DCA vs. Lump Sum</h2>
-        <canvas id="dcaLump" height="220"></canvas>
+        <div class="mb-1 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-300">📈 Historical Performance <span id="history-years" class="text-slate-500"></span></h2>
+          <span id="history-summary" class="text-xs text-slate-400"></span>
+        </div>
+        <div class="h-72"><canvas id="history"></canvas></div>
       </div>
     </section>
 
     <section class="mb-6 card glow p-4">
-      <h2 class="mb-2 text-sm font-semibold text-slate-300">3-Year Projection Bands</h2>
-      <canvas id="bands" height="120"></canvas>
+      <div class="mb-1 flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-slate-300">🔮 Forward Projection <span id="proj-years" class="text-slate-500"></span></h2>
+        <span id="proj-summary" class="text-xs text-slate-400"></span>
+      </div>
+      <div class="h-72"><canvas id="projection"></canvas></div>
     </section>
 
     <!-- AI + Ladder -->

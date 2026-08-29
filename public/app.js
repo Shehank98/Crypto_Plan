@@ -53,47 +53,78 @@ function renderDonut(holdings) {
   });
 }
 
-function baseLineOpts(y2) {
+// "2024-03" -> "Mar '24"
+function fmtYm(ym) {
+  const [y, m] = String(ym).split("-").map(Number);
+  if (!y || !m) return ym;
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
+}
+const kfmt = (v) => (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + "M" : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(0) + "k" : v);
+
+function baseLineOpts() {
   return {
     responsive: true,
+    maintainAspectRatio: false,
     interaction: { mode: "index", intersect: false },
-    plugins: { legend: { labels: { color: "#cbd5e1" } } },
+    plugins: {
+      legend: { labels: { color: "#cbd5e1", usePointStyle: true, boxWidth: 8 } },
+      tooltip: {
+        callbacks: {
+          title: (items) => (items[0] ? fmtYm(items[0].label) : ""),
+          label: (it) => `${it.dataset.label}: ${fmtLkr(it.parsed.y)}`,
+        },
+      },
+    },
     scales: {
-      x: { ticks: { color: "#64748b", maxTicksLimit: 12 }, grid: { color: "#1e2532" } },
-      y: { ticks: { color: "#64748b", callback: (v) => (v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : (v / 1e3).toFixed(0) + "k") }, grid: { color: "#1e2532" } },
+      x: { ticks: { color: "#64748b", maxTicksLimit: 10, callback(i) { return fmtYm(this.getLabelForValue(i)); } }, grid: { color: "#161b26" } },
+      y: { ticks: { color: "#64748b", callback: (v) => "LKR " + kfmt(v) }, grid: { color: "#1e2532" } },
     },
   };
 }
 
-function renderDcaLump(d) {
-  if (typeof Chart === "undefined") return;
-  const ctx = $("dcaLump");
-  if (charts.dcaLump) charts.dcaLump.destroy();
-  charts.dcaLump = new Chart(ctx, {
+function renderHistory(h) {
+  $("history-years").textContent = h && h.summary ? `(${(h.summary.months / 12).toFixed(1)} yrs)` : "";
+  if (h && h.summary) {
+    const s = h.summary;
+    const c = s.dcaRoiPct >= 0 ? "text-emerald-400" : "text-rose-400";
+    $("history-summary").innerHTML = `Invested ${fmtLkr(s.investedLkr)} → DCA <b class="${c}">${fmtLkr(s.dcaValueLkr)} (${signPct(s.dcaRoiPct)})</b> · Lump ${fmtLkr(s.lumpValueLkr)} (${signPct(s.lumpRoiPct)})`;
+  } else {
+    $("history-summary").textContent = "Loads once multi-year prices are fetched.";
+  }
+  if (typeof Chart === "undefined" || !h || !h.series || !h.series.length) return;
+  const ctx = $("history");
+  if (charts.history) charts.history.destroy();
+  charts.history = new Chart(ctx, {
     type: "line",
     data: {
-      labels: d.labels,
+      labels: h.series.map((x) => x.date),
       datasets: [
-        { label: "DCA", data: d.dca, borderColor: "#818cf8", backgroundColor: "rgba(129,140,248,.15)", fill: true, tension: 0.25, pointRadius: 0 },
-        { label: "Lump Sum", data: d.lump, borderColor: "#22d3ee", borderDash: [5, 4], tension: 0.25, pointRadius: 0 },
+        { label: "DCA value", data: h.series.map((x) => x.dcaValue), borderColor: "#818cf8", backgroundColor: "rgba(129,140,248,.15)", fill: true, borderWidth: 2.5, tension: 0.2, pointRadius: 0 },
+        { label: "Lump sum", data: h.series.map((x) => x.lumpValue), borderColor: "#22d3ee", borderWidth: 2, borderDash: [5, 4], tension: 0.2, pointRadius: 0 },
+        { label: "Invested", data: h.series.map((x) => x.invested), borderColor: "#64748b", borderWidth: 1.5, tension: 0.2, pointRadius: 0 },
       ],
     },
     options: baseLineOpts(),
   });
 }
 
-function renderBands(b) {
-  if (typeof Chart === "undefined") return;
-  const ctx = $("bands");
-  if (charts.bands) charts.bands.destroy();
-  charts.bands = new Chart(ctx, {
+function renderProjection(p) {
+  $("proj-years").textContent = p && p.assumptions ? `(${p.assumptions.years} yrs)` : "";
+  if (p && p.assumptions) {
+    $("proj-summary").innerHTML = `Base ${p.base && p.base.length ? fmtLkr(p.base[p.base.length - 1]) : "—"} by ${p.labels ? fmtYm(p.labels[p.labels.length - 1]) : ""} · μ ${p.assumptions.monthlyMeanPct}%/mo σ ${p.assumptions.monthlySigmaPct}%`;
+  }
+  if (typeof Chart === "undefined" || !p || !p.labels || !p.labels.length) return;
+  const ctx = $("projection");
+  if (charts.projection) charts.projection.destroy();
+  charts.projection = new Chart(ctx, {
     type: "line",
     data: {
-      labels: b.labels,
+      labels: p.labels,
       datasets: [
-        { label: "Bull", data: b.bull, borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,.08)", fill: "+1", tension: 0.25, pointRadius: 0 },
-        { label: "Base", data: b.base, borderColor: "#818cf8", tension: 0.25, pointRadius: 0 },
-        { label: "Bear", data: b.bear, borderColor: "#f43f5e", backgroundColor: "rgba(244,63,94,.08)", fill: "-1", tension: 0.25, pointRadius: 0 },
+        { label: "Bull", data: p.bull, borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,.10)", fill: "+1", borderWidth: 1.5, tension: 0.2, pointRadius: 0 },
+        { label: "Base", data: p.base, borderColor: "#818cf8", backgroundColor: "rgba(129,140,248,.05)", fill: false, borderWidth: 2.5, tension: 0.2, pointRadius: 0 },
+        { label: "Bear", data: p.bear, borderColor: "#f43f5e", backgroundColor: "rgba(244,63,94,.10)", fill: "-1", borderWidth: 1.5, tension: 0.2, pointRadius: 0 },
+        { label: "Invested", data: p.invested, borderColor: "#64748b", borderWidth: 1.5, borderDash: [4, 4], tension: 0.2, pointRadius: 0 },
       ],
     },
     options: baseLineOpts(),
@@ -255,8 +286,8 @@ async function loadAll() {
     const safe = (fn) => { try { fn(); } catch (e) { console.error(e); } };
     safe(() => renderStats(portfolio));
     safe(() => renderDonut(portfolio.holdings));
-    safe(() => renderDcaLump(projection.dcaVsLump));
-    safe(() => renderBands(projection.bands));
+    safe(() => renderHistory(projection.history));
+    safe(() => renderProjection(projection.projection));
     safe(() => renderLadder(market.allocation, market.coins));
     safe(() => renderAnalyst(analyst.report, analyst.source));
     safe(() => renderAccuracy(accuracy));

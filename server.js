@@ -22,17 +22,34 @@ const PORT = process.env.PORT || 3000;
 const MONTHLY_LKR = Number(process.env.MONTHLY_BUDGET_LKR || 10000);
 const DCA_DAY = Number(process.env.DCA_DAY_OF_MONTH || 1);
 const AUTO_DCA = (process.env.AUTO_DCA ?? "true") !== "false";
-const COINS = ["BTC", "ETH", "SOL", "BNB"];
+const HISTORY_YEARS = Number(process.env.HISTORY_YEARS || 5); // long-run backtest window
+const PROJECTION_YEARS = Number(process.env.PROJECTION_YEARS || 3); // forward projection horizon
+// Coins are configurable: set COINS="BTC,ETH,SOL,BNB,ADA,..." (comma-separated symbols).
+const DEFAULT_COINS = ["BTC", "ETH", "SOL", "BNB"];
+const COINS = (process.env.COINS ? process.env.COINS.split(",") : DEFAULT_COINS)
+  .map((s) => s.trim().toUpperCase())
+  .filter(Boolean);
 const RESERVE = ["USDT", "USDC"];
 const ALL_SYMBOLS = [...COINS, "USDT"];
+// Symbol -> CoinGecko id (for the keyless fallback). Extend via COIN_IDS env
+// (JSON), e.g. COIN_IDS='{"FOO":"foo-token"}'. Binance (SYMUSDT) is primary and
+// works for any listed symbol regardless of this map.
 const CG_IDS = {
-  BTC: "bitcoin",
-  ETH: "ethereum",
-  SOL: "solana",
-  BNB: "binancecoin",
-  USDT: "tether",
-  USDC: "usd-coin",
+  BTC: "bitcoin", ETH: "ethereum", SOL: "solana", BNB: "binancecoin",
+  USDT: "tether", USDC: "usd-coin", ADA: "cardano", XRP: "ripple",
+  DOGE: "dogecoin", DOT: "polkadot", AVAX: "avalanche-2", LINK: "chainlink",
+  MATIC: "matic-network", POL: "polygon-ecosystem-token", LTC: "litecoin",
+  TRX: "tron", ATOM: "cosmos", UNI: "uniswap", ARB: "arbitrum", OP: "optimism",
+  APT: "aptos", NEAR: "near", FIL: "filecoin", ICP: "internet-computer",
+  ETC: "ethereum-classic", XLM: "stellar", ALGO: "algorand", VET: "vechain",
+  HBAR: "hedera-hashgraph", SUI: "sui", SEI: "sei-network", TIA: "celestia",
+  INJ: "injective-protocol", RNDR: "render-token", SHIB: "shiba-inu", PEPE: "pepe",
 };
+try {
+  if (process.env.COIN_IDS) Object.assign(CG_IDS, JSON.parse(process.env.COIN_IDS));
+} catch (e) {
+  console.warn("[config] COIN_IDS parse failed:", e.message);
+}
 const binancePair = (s) => `${s}USDT`;
 
 const http = axios.create({ timeout: 12000, headers: { "User-Agent": "dca-engine/1.0" } });
@@ -232,6 +249,31 @@ async function getKlineCloses(symbol, limit = 200) {
   }
 }
 
+// Monthly closes for multi-year history. Binance 1M klines (up to ~decades),
+// CoinGecko daily->monthly fallback. Returns [{ ym: "YYYY-MM", close }].
+async function getMonthlyCloses(symbol, months) {
+  if (RESERVE.includes(symbol)) return [];
+  try {
+    const { data } = await http.get("https://api.binance.com/api/v3/klines", {
+      params: { symbol: binancePair(symbol), interval: "1M", limit: Math.min(1000, months + 2) },
+    });
+    return data.map((k) => ({ ym: new Date(k[0]).toISOString().slice(0, 7), close: Number(k[4]) }));
+  } catch (e) {
+    try {
+      const { data } = await http.get(
+        `https://api.coingecko.com/api/v3/coins/${CG_IDS[symbol]}/market_chart`,
+        { params: { vs_currency: "usd", days: "max", interval: "daily" } },
+      );
+      const byMonth = new Map();
+      for (const [ms, price] of data.prices) byMonth.set(new Date(ms).toISOString().slice(0, 7), Number(price));
+      return [...byMonth.entries()].map(([ym, close]) => ({ ym, close }));
+    } catch (e2) {
+      console.warn(`[monthly] ${symbol} failed:`, e2.message);
+      return [];
+    }
+  }
+}
+
 async function get24hChange(symbol) {
   if (RESERVE.includes(symbol)) return 0;
   try {
@@ -304,7 +346,8 @@ async function getOnchain() {
 // ----------------------------------------------------------------------------
 // Market snapshot (in-memory + price_cache table)
 // ----------------------------------------------------------------------------
-const MARKET = { fx: fxCache.rate, updatedAt: null, coins: {}, fearGreed: { value: null }, closes: {} };
+const MARKET = { fx: fxCache.rate, updatedAt: null, coins: {}, fearGreed: { value: null }, closes: {}, monthly: {} };
+let monthlyFetchedAt = 0;
 
 function mayerBand(m) {
   if (m == null) return { multiplier: 1, label: "Unknown" };
@@ -371,6 +414,19 @@ async function refreshMarket() {
       console.warn(`[market] ${sym} refresh failed:`, e.message);
     }
   }
+  // Monthly multi-year history changes slowly — refresh at most every 12h.
+  if (Date.now() - monthlyFetchedAt > 12 * 3600_000) {
+    for (const sym of COINS) {
+      try {
+        const m = await getMonthlyCloses(sym, HISTORY_YEARS * 12);
+        if (m.length) MARKET.monthly[sym] = m;
+      } catch (e) {
+        console.warn(`[monthly] ${sym}:`, e.message);
+      }
+    }
+    monthlyFetchedAt = Date.now();
+  }
+
   MARKET.updatedAt = new Date().toISOString();
   console.log("[market] refreshed at", MARKET.updatedAt);
 }
@@ -525,75 +581,111 @@ function dcsTargets(holdings) {
 }
 
 // ----------------------------------------------------------------------------
-// Projection: DCA vs lump sum (historical) + 3-year scenario bands
+// Projection & history — month/year-wise over a multi-year window.
+// Uses monthly closes (Binance 1M) so labels are real YYYY-MM dates. Historical
+// values are approximated in LKR at the current fx (no historical fx feed).
 // ----------------------------------------------------------------------------
-function dcaVsLump() {
-  // Equal-weight the tracked coins over the last ~12 months of daily closes.
-  const series = COINS.map((s) => MARKET.closes[s]).filter((c) => c && c.length >= 30);
-  if (series.length === 0) return { labels: [], dca: [], lump: [] };
-  const len = Math.min(...series.map((c) => c.length));
-  const days = Math.min(len, 365);
-  // index basket = average of normalized coin prices.
-  const basket = [];
-  for (let i = len - days; i < len; i++) {
-    let sum = 0;
-    for (const c of series) sum += c[i] / c[len - days];
-    basket.push(sum / series.length);
-  }
-  const months = Math.floor(days / 30);
-  const labels = [];
-  const dca = [];
-  const lump = [];
-  const lumpTotal = MONTHLY_LKR * months;
-  const lumpUnits = lumpTotal / basket[0];
-  let dcaUnits = 0;
-  let dcaInvested = 0;
-  for (let m = 0; m < months; m++) {
-    const idx = Math.min(m * 30, basket.length - 1);
-    const price = basket[idx];
-    dcaUnits += MONTHLY_LKR / price;
-    dcaInvested += MONTHLY_LKR;
-    labels.push(`M${m + 1}`);
-    dca.push(round(dcaUnits * price, 0));
-    lump.push(round(lumpUnits * price, 0));
-  }
-  return { labels, dca, lump, investedFinal: dcaInvested };
-}
-
-function projectionBands(currentValueLkr) {
-  // Monthly return stats from blended daily returns of tracked coins.
-  const rets = [];
+function alignedMonthly() {
+  // month -> { SYM: close } across all coins, keeping only fully-covered months.
+  const per = {};
   for (const s of COINS) {
-    const c = MARKET.closes[s];
-    if (!c || c.length < 30) continue;
-    for (let i = 1; i < c.length; i++) if (c[i - 1] > 0) rets.push(c[i] / c[i - 1] - 1);
-  }
-  let mMean = 0.02;
-  let mSigma = 0.18;
-  if (rets.length > 30) {
-    const dMean = rets.reduce((a, b) => a + b, 0) / rets.length;
-    const dVar = rets.reduce((a, b) => a + (b - dMean) ** 2, 0) / rets.length;
-    mMean = dMean * 30;
-    mSigma = Math.sqrt(dVar) * Math.sqrt(30);
-  }
-  const scenarios = {
-    bear: mMean - mSigma,
-    base: mMean,
-    bull: mMean + mSigma,
-  };
-  const labels = [];
-  const out = { bear: [], base: [], bull: [] };
-  const start = currentValueLkr || 0;
-  for (const key of Object.keys(scenarios)) {
-    let v = start;
-    const r = Math.max(-0.4, Math.min(0.5, scenarios[key]));
-    for (let m = 1; m <= 36; m++) {
-      v = v * (1 + r) + MONTHLY_LKR;
-      out[key].push(round(v, 0));
+    for (const { ym, close } of MARKET.monthly[s] || []) {
+      (per[ym] = per[ym] || {})[s] = close;
     }
   }
-  for (let m = 1; m <= 36; m++) labels.push(`M${m}`);
-  return { labels, ...out, assumptions: { monthlyMean: round(mMean, 4), monthlySigma: round(mSigma, 4) } };
+  const months = Object.keys(per)
+    .sort()
+    .filter((m) => COINS.every((s) => per[m][s] != null && per[m][s] > 0));
+  return { per, months };
+}
+
+/** Historical DCA vs lump backtest, one point per month with a real date. */
+function historyBacktest(years) {
+  const fx = MARKET.fx;
+  const { per, months: all } = alignedMonthly();
+  const months = all.slice(-(years * 12));
+  if (months.length < 3) return { labels: [], series: [], summary: null };
+
+  const usdMonthly = MONTHLY_LKR / fx; // approximate LKR budget in USD
+  const usdPerCoin = usdMonthly / COINS.length;
+  const unitsDca = Object.fromEntries(COINS.map((s) => [s, 0]));
+  // Lump: deploy the full multi-year budget at the first month.
+  const totalUsd = usdMonthly * months.length;
+  const unitsLump = Object.fromEntries(COINS.map((s) => [s, totalUsd / COINS.length / per[months[0]][s]]));
+
+  let invested = 0;
+  const series = months.map((m) => {
+    for (const s of COINS) unitsDca[s] += usdPerCoin / per[m][s];
+    invested += MONTHLY_LKR;
+    const dcaUsd = COINS.reduce((a, s) => a + unitsDca[s] * per[m][s], 0);
+    const lumpUsd = COINS.reduce((a, s) => a + unitsLump[s] * per[m][s], 0);
+    return {
+      date: m,
+      invested: Math.round(invested),
+      dcaValue: Math.round(dcaUsd * fx),
+      lumpValue: Math.round(lumpUsd * fx),
+    };
+  });
+  const last = series[series.length - 1];
+  const summary = {
+    months: series.length,
+    investedLkr: last.invested,
+    dcaValueLkr: last.dcaValue,
+    lumpValueLkr: last.lumpValue,
+    dcaRoiPct: round(((last.dcaValue - last.invested) / last.invested) * 100, 1),
+    lumpRoiPct: round(((last.lumpValue - last.invested) / last.invested) * 100, 1),
+  };
+  return { labels: series.map((x) => x.date), series, summary };
+}
+
+function addMonths(ym, n) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Forward projection, month/year-wise, from monthly-return statistics. */
+function forwardProjection(years, startValueLkr) {
+  const rets = [];
+  for (const s of COINS) {
+    const arr = (MARKET.monthly[s] || []).map((x) => x.close);
+    for (let i = 1; i < arr.length; i++) if (arr[i - 1] > 0) rets.push(arr[i] / arr[i - 1] - 1);
+  }
+  let mean = 0.02;
+  let sigma = 0.2;
+  if (rets.length > 12) {
+    mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+    const v = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+    sigma = Math.sqrt(v);
+  }
+  const nowYm = new Date().toISOString().slice(0, 7);
+  const scenarios = { bear: mean - sigma, base: mean, bull: mean + sigma };
+  const labels = [];
+  const out = { bear: [], base: [], bull: [] };
+  const totalMonths = years * 12;
+  for (let m = 1; m <= totalMonths; m++) labels.push(addMonths(nowYm, m));
+  for (const key of Object.keys(scenarios)) {
+    let v = startValueLkr || 0;
+    const r = Math.max(-0.35, Math.min(0.45, scenarios[key]));
+    let invested = startValueLkr || 0;
+    for (let m = 1; m <= totalMonths; m++) {
+      v = v * (1 + r) + MONTHLY_LKR;
+      invested += MONTHLY_LKR;
+      out[key].push(Math.round(v));
+    }
+  }
+  const invLine = [];
+  let inv = startValueLkr || 0;
+  for (let m = 1; m <= totalMonths; m++) {
+    inv += MONTHLY_LKR;
+    invLine.push(Math.round(inv));
+  }
+  return {
+    labels,
+    ...out,
+    invested: invLine,
+    assumptions: { monthlyMeanPct: round(mean * 100, 2), monthlySigmaPct: round(sigma * 100, 2), years, dataMonths: rets.length + 1 },
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -989,7 +1081,15 @@ const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
 app.get("/api/health", (_req, res) => res.json({ status: "ok", market: MARKET.updatedAt }));
 
 app.get("/api/config", (_req, res) =>
-  res.json({ coins: COINS, reserve: RESERVE, monthlyBudgetLkr: MONTHLY_LKR, dcaDay: DCA_DAY, nextDcaDate: nextDcaDate() }),
+  res.json({
+    coins: COINS,
+    reserve: RESERVE,
+    monthlyBudgetLkr: MONTHLY_LKR,
+    dcaDay: DCA_DAY,
+    nextDcaDate: nextDcaDate(),
+    historyYears: HISTORY_YEARS,
+    projectionYears: PROJECTION_YEARS,
+  }),
 );
 
 app.post("/api/refresh", wrap(async (_req, res) => {
@@ -1095,9 +1195,15 @@ app.get("/api/export", wrap(async (req, res) => {
   res.json({ transactions: rows });
 }));
 
-app.get("/api/projection", wrap(async (_req, res) => {
+app.get("/api/projection", wrap(async (req, res) => {
   const p = await computePortfolio();
-  res.json({ dcaVsLump: dcaVsLump(), bands: projectionBands(p.totals.valueLkr) });
+  const historyYears = Number(req.query.years) || HISTORY_YEARS;
+  const projectionYears = Number(req.query.projYears) || PROJECTION_YEARS;
+  res.json({
+    history: historyBacktest(historyYears),
+    projection: forwardProjection(projectionYears, p.totals.valueLkr),
+    startValueLkr: p.totals.valueLkr,
+  });
 }));
 
 app.get("/api/sentiment", wrap(async (_req, res) => res.json(MARKET.fearGreed)));
@@ -1303,4 +1409,4 @@ if (require.main === module) boot();
 
 module.exports = app;
 // Exposed for unit testing of the pure decision-support math.
-module.exports._test = { macd, bollinger, annualizedVol, compositeSignal, pearson, scoreAction, maxDrawdown, mayerBand };
+module.exports._test = { macd, bollinger, annualizedVol, compositeSignal, pearson, scoreAction, maxDrawdown, mayerBand, historyBacktest, forwardProjection, MARKET, COINS };
