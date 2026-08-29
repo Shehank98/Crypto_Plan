@@ -210,22 +210,34 @@ async function getUsdLkr() {
 
 async function getSpotUsd(symbol) {
   if (RESERVE.includes(symbol)) return 1;
+  // Try several free, keyless sources in order — Binance is geo-blocked in some
+  // hosting regions (HTTP 451), so Coinbase/CoinGecko keep prices flowing.
+  // 1) Binance
   try {
-    const { data } = await http.get("https://api.binance.com/api/v3/ticker/price", {
-      params: { symbol: binancePair(symbol) },
-    });
-    return Number(data.price);
+    const { data } = await http.get("https://api.binance.com/api/v3/ticker/price", { params: { symbol: binancePair(symbol) } });
+    const p = Number(data.price);
+    if (p > 0) return p;
   } catch (e) {
-    try {
-      const { data } = await http.get("https://api.coingecko.com/api/v3/simple/price", {
-        params: { ids: CG_IDS[symbol], vs_currencies: "usd" },
-      });
-      return Number(data[CG_IDS[symbol]].usd);
-    } catch (e2) {
-      console.warn(`[price] ${symbol} spot failed:`, e2.message);
-      return null;
-    }
+    /* try next */
   }
+  // 2) Coinbase (global, keyless)
+  try {
+    const { data } = await http.get(`https://api.coinbase.com/v2/prices/${symbol}-USD/spot`);
+    const p = Number(data.data.amount);
+    if (p > 0) return p;
+  } catch (e) {
+    /* try next */
+  }
+  // 3) CoinGecko
+  try {
+    const { data } = await http.get("https://api.coingecko.com/api/v3/simple/price", { params: { ids: CG_IDS[symbol], vs_currencies: "usd" } });
+    const p = Number(data[CG_IDS[symbol]] && data[CG_IDS[symbol]].usd);
+    if (p > 0) return p;
+  } catch (e) {
+    /* give up below */
+  }
+  console.warn(`[price] ${symbol} spot: all sources failed`);
+  return null;
 }
 
 async function getKlineCloses(symbol, limit = 200) {
@@ -1010,7 +1022,11 @@ async function logTransaction({ symbol, side = "BUY", amount_lkr, price_lkr, uni
     const spot = await getSpotUsd(symbol);
     priceLkr = spot != null ? spot * fx : null;
   }
-  if (priceLkr == null || priceLkr <= 0) throw new Error(`No price available for ${symbol}`);
+  if (priceLkr == null || priceLkr <= 0) {
+    const err = new Error(`Couldn't fetch a live price for ${symbol} right now. Hit "Refresh prices" and retry, or enter a price (LKR) override in the form.`);
+    err.statusCode = 422;
+    throw err;
+  }
 
   let amt = amount_lkr != null ? Number(amount_lkr) : null;
   let u = units != null ? Number(units) : null;
@@ -1074,8 +1090,8 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
-  console.error("[api]", e);
-  res.status(500).json({ error: e.message });
+  console.error("[api]", e.message);
+  res.status(e.statusCode || 500).json({ error: e.message });
 });
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok", market: MARKET.updatedAt }));
