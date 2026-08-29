@@ -20,8 +20,12 @@ Greed, CoinDesk/Cointelegraph RSS, DefiLlama, ExchangeRate (USD→LKR).
 - **C — Dollar-cost selling:** 2×/3×/5× take-profit targets from VWAP with sell suggestions.
 - **D — Gemini analyst:** portfolio + Fear&Greed + SMA/Mayer/RSI + news + DefiLlama TVL →
   structured JSON (`responseSchema`), stored in `ai_reports` to track accuracy over time.
-- **E — Telegram bot:** `/start`, `/portfolio`, `/buy <sym> <lkr>`, `/analyst`, plus a
-  6-hour cron dip alert (>5% 24h drop) with ladder levels.
+- **E — Telegram bot:** `/start`, `/portfolio`, `/buy <sym> <lkr>`, `/analyst`, `/dca`.
+  Every chat that messages the bot is remembered, so the **6-hour dip alerts** and
+  **monthly auto-DCA summaries** broadcast to all of them (plus `TELEGRAM_CHAT_ID`).
+- **Auto-DCA:** on `DCA_DAY_OF_MONTH` the engine logs the Mayer-scaled allocation as real
+  transactions automatically (idempotent — once per month). Toggle with `AUTO_DCA`; trigger
+  now via `/dca` or `POST /api/auto-dca`.
 - **F — Dashboard:** stat cards, allocation donut, DCA-vs-lump line, 3-year projection
   bands, AI feed, ladder matrix, and an editable transactions table.
 
@@ -59,7 +63,8 @@ This is one service built from the root `Dockerfile` (no monorepo, no Root Direc
 `/api/health` · `/api/config` · `/api/market` · `POST /api/refresh` · `/api/portfolio` ·
 `/api/transactions` (GET/POST, `PUT|DELETE /:id`) · `POST /api/import` ·
 `GET /api/export?format=csv|json` · `/api/projection` · `/api/sentiment` · `/api/news` ·
-`/api/onchain` · `/api/analyst` (GET latest, POST to generate) · `/api/analyst/history`.
+`/api/onchain` · `/api/analyst` (GET latest, POST to generate) · `/api/analyst/history` ·
+`POST /api/auto-dca` (run this month's Mayer-scaled DCA; `{"force":true}` to re-run).
 
 Log a purchase (price auto-fetched live if omitted):
 ```bash

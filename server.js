@@ -21,6 +21,7 @@ const { Pool } = require("pg");
 const PORT = process.env.PORT || 3000;
 const MONTHLY_LKR = Number(process.env.MONTHLY_BUDGET_LKR || 10000);
 const DCA_DAY = Number(process.env.DCA_DAY_OF_MONTH || 1);
+const AUTO_DCA = (process.env.AUTO_DCA ?? "true") !== "false";
 const COINS = ["BTC", "ETH", "SOL", "BNB"];
 const RESERVE = ["USDT", "USDC"];
 const ALL_SYMBOLS = [...COINS, "USDT"];
@@ -654,6 +655,46 @@ async function logTransaction({ symbol, side = "BUY", amount_lkr, price_lkr, uni
 }
 
 // ----------------------------------------------------------------------------
+// Automated monthly DCA: log the Mayer-scaled allocation as real transactions,
+// once per calendar month. Idempotent via a note tag.
+// ----------------------------------------------------------------------------
+function autoDcaTag(d = new Date()) {
+  return `auto-dca ${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function runAutoDca(force = false) {
+  const tag = autoDcaTag();
+  if (!force) {
+    const { rows } = await db.query("SELECT 1 FROM transactions WHERE note = $1 LIMIT 1", [tag]);
+    if (rows.length) return { skipped: true, reason: "already ran this month", tag };
+  }
+  const plan = allocationPlan();
+  const logged = [];
+  for (const c of plan.perCoin) {
+    if (c.suggestedLkr <= 0) continue;
+    try {
+      const tx = await logTransaction({ symbol: c.symbol, amount_lkr: c.suggestedLkr, note: tag });
+      logged.push({ symbol: c.symbol, lkr: c.suggestedLkr, units: Number(tx.units) });
+    } catch (e) {
+      console.warn(`[auto-dca] ${c.symbol} skipped:`, e.message);
+    }
+  }
+  if (plan.reserveDivertLkr > 0) {
+    try {
+      await logTransaction({ symbol: "USDT", amount_lkr: plan.reserveDivertLkr, note: tag });
+      logged.push({ symbol: "USDT", lkr: plan.reserveDivertLkr, reserve: true });
+    } catch (e) {
+      console.warn("[auto-dca] reserve skipped:", e.message);
+    }
+  }
+  if (logged.length) {
+    const summary = logged.map((l) => `${l.symbol}: ${fmtLkr(l.lkr)}`).join("\n");
+    await broadcast(`🤖 *Auto-DCA executed* (${tag})\n${summary}\nTotal: ${fmtLkr(logged.reduce((a, l) => a + l.lkr, 0))}`);
+  }
+  return { ran: logged.length > 0, tag, logged };
+}
+
+// ----------------------------------------------------------------------------
 // Express app
 // ----------------------------------------------------------------------------
 const app = express();
@@ -791,6 +832,9 @@ app.get("/api/analyst", wrap(async (_req, res) => {
 
 app.post("/api/analyst", wrap(async (_req, res) => res.json(await runAnalyst(true))));
 
+// Manually trigger this month's auto-DCA (force=true re-runs even if already done).
+app.post("/api/auto-dca", wrap(async (req, res) => res.json(await runAutoDca(req.body && req.body.force === true))));
+
 app.get("/api/analyst/history", wrap(async (_req, res) => {
   const { rows } = await db.query("SELECT id, report_json, source, created_at FROM ai_reports ORDER BY created_at DESC LIMIT 20");
   res.json({ reports: rows });
@@ -803,6 +847,33 @@ app.get("*", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.h
 // Module E: Telegram bot (optional)
 // ----------------------------------------------------------------------------
 let bot = null;
+
+async function rememberChat(chatId) {
+  await db
+    .query("INSERT INTO telegram_chats (chat_id) VALUES ($1) ON CONFLICT DO NOTHING", [chatId])
+    .catch((e) => console.warn("[telegram] remember chat:", e.message));
+}
+
+async function getBroadcastChats() {
+  const set = new Set();
+  if (process.env.TELEGRAM_CHAT_ID) set.add(String(process.env.TELEGRAM_CHAT_ID));
+  try {
+    const { rows } = await db.query("SELECT chat_id FROM telegram_chats");
+    for (const r of rows) set.add(String(r.chat_id));
+  } catch (e) {
+    /* table may not exist yet */
+  }
+  return [...set];
+}
+
+async function broadcast(text) {
+  if (!bot) return;
+  const chats = await getBroadcastChats();
+  for (const id of chats) {
+    await bot.sendMessage(id, text, { parse_mode: "Markdown" }).catch((e) => console.warn("[broadcast]", e.message));
+  }
+}
+
 function startTelegram() {
   if (!process.env.TELEGRAM_BOT_TOKEN) {
     console.log("[telegram] TELEGRAM_BOT_TOKEN not set — bot disabled");
@@ -812,13 +883,28 @@ function startTelegram() {
     const TelegramBot = require("node-telegram-bot-api");
     bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
+    // Remember every chat that talks to the bot, so alerts reach all of them.
+    bot.on("message", (msg) => rememberChat(msg.chat.id));
+
     bot.onText(/\/start/, (msg) =>
       bot.sendMessage(
         msg.chat.id,
-        "🤖 *Crypto DCA Engine*\n/portfolio – holdings & P&L\n/buy <symbol> <lkr> – log a buy\n/analyst – AI allocation\n",
+        "🤖 *Crypto DCA Engine*\n/portfolio – holdings & P&L\n/buy <symbol> <lkr> – log a buy\n/analyst – AI allocation\n/dca – run this month's auto-DCA now\n\nYou'll receive dip alerts and monthly auto-DCA summaries here.",
         { parse_mode: "Markdown" },
       ),
     );
+
+    bot.onText(/\/dca/, async (msg) => {
+      try {
+        const r = await runAutoDca(true);
+        const txt = r.logged && r.logged.length
+          ? r.logged.map((l) => `${l.symbol}: ${fmtLkr(l.lkr)}`).join("\n")
+          : "No buys logged (prices unavailable).";
+        await bot.sendMessage(msg.chat.id, `🤖 *Auto-DCA* (${r.tag})\n${txt}`, { parse_mode: "Markdown" });
+      } catch (e) {
+        bot.sendMessage(msg.chat.id, `⚠️ ${e.message}`);
+      }
+    });
 
     bot.onText(/\/portfolio/, async (msg) => {
       try {
@@ -875,18 +961,14 @@ function fmtLkr(n) {
 }
 
 async function dipAlert() {
-  if (!bot || !process.env.TELEGRAM_CHAT_ID) return;
+  if (!bot) return;
   for (const sym of COINS) {
     const c = MARKET.coins[sym];
     if (c && c.change24h != null && c.change24h <= -5) {
       const ladder = (c.ladderLkr || []).map((p) => fmtLkr(p)).join(" / ");
-      await bot
-        .sendMessage(
-          process.env.TELEGRAM_CHAT_ID,
-          `🔻 *Dip Alert* ${sym} ${c.change24h}% (24h)\nSpot: ${fmtLkr(c.priceLkr)}\nLadder buys: ${ladder}`,
-          { parse_mode: "Markdown" },
-        )
-        .catch((e) => console.warn("[dip] send failed:", e.message));
+      await broadcast(
+        `🔻 *Dip Alert* ${sym} ${c.change24h}% (24h)\nSpot: ${fmtLkr(c.priceLkr)}\nLadder buys: ${ladder}`,
+      );
     }
   }
 }
@@ -897,6 +979,19 @@ async function dipAlert() {
 function startCron() {
   cron.schedule("*/30 * * * *", () => refreshMarket().catch((e) => console.warn("[cron market]", e.message)));
   cron.schedule("0 */6 * * *", () => dipAlert().catch((e) => console.warn("[cron dip]", e.message)));
+  if (AUTO_DCA) {
+    // Daily check at 09:00 UTC; runs once on the configured DCA day (idempotent).
+    cron.schedule("0 9 * * *", async () => {
+      if (new Date().getUTCDate() !== DCA_DAY) return;
+      try {
+        const r = await runAutoDca(false);
+        console.log("[cron auto-dca]", JSON.stringify(r));
+      } catch (e) {
+        console.warn("[cron auto-dca]", e.message);
+      }
+    });
+    console.log(`[cron] auto-DCA enabled (day ${DCA_DAY} of month)`);
+  }
   console.log("[cron] scheduled market refresh (30m) + dip alerts (6h)");
 }
 

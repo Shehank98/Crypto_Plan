@@ -42,3 +42,10 @@ CREATE TABLE IF NOT EXISTS price_cache (
     ladder_json    JSONB,
     updated_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Telegram chats that have interacted with the bot — dip alerts and auto-DCA
+-- summaries broadcast to all of them (plus TELEGRAM_CHAT_ID if set).
+CREATE TABLE IF NOT EXISTS telegram_chats (
+    chat_id    BIGINT PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
