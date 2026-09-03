@@ -172,6 +172,40 @@ function maxDrawdown(equity) {
   return mdd;
 }
 
+// --- Scalping indicators: ATR, VWAP, MFI (volume-weighted) ---
+function atr(highs, lows, closes, period = 14) {
+  if (!closes || closes.length < period + 1) return null;
+  const tr = [];
+  for (let i = 1; i < closes.length; i++) {
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  return sma(tr, period);
+}
+function vwap(highs, lows, closes, volumes) {
+  let pv = 0;
+  let v = 0;
+  for (let i = 0; i < closes.length; i++) {
+    const tp = (highs[i] + lows[i] + closes[i]) / 3;
+    pv += tp * (volumes[i] || 0);
+    v += volumes[i] || 0;
+  }
+  return v ? pv / v : null;
+}
+function mfi(highs, lows, closes, volumes, period = 14) {
+  if (!closes || closes.length < period + 1) return null;
+  let pos = 0;
+  let neg = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const tp = (highs[i] + lows[i] + closes[i]) / 3;
+    const ptp = (highs[i - 1] + lows[i - 1] + closes[i - 1]) / 3;
+    const mf = tp * (volumes[i] || 0);
+    if (tp > ptp) pos += mf;
+    else if (tp < ptp) neg += mf;
+  }
+  if (neg === 0) return 100;
+  return 100 - 100 / (1 + pos / neg);
+}
+
 /**
  * Composite 0–100 "accumulation attractiveness" score blending valuation
  * (Mayer), momentum (RSI, MACD), mean-reversion (Bollinger %B) and trend
@@ -283,6 +317,46 @@ async function getMonthlyCloses(symbol, months) {
       console.warn(`[monthly] ${symbol} failed:`, e2.message);
       return [];
     }
+  }
+}
+
+// Intraday OHLCV for scalping signals. Binance -> Coinbase fallback.
+const TF_BINANCE = { "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h" };
+const TF_COINBASE = { "5m": 300, "15m": 900, "1h": 3600 };
+const TF_MINUTES = { "5m": 5, "15m": 15, "1h": 60, "4h": 240 };
+
+async function getOHLCV(symbol, interval, limit = 200) {
+  if (RESERVE.includes(symbol)) return null;
+  try {
+    const { data } = await http.get("https://api.binance.com/api/v3/klines", {
+      params: { symbol: binancePair(symbol), interval: TF_BINANCE[interval] || "1h", limit },
+    });
+    return {
+      highs: data.map((k) => Number(k[2])),
+      lows: data.map((k) => Number(k[3])),
+      closes: data.map((k) => Number(k[4])),
+      volumes: data.map((k) => Number(k[5])),
+    };
+  } catch (e) {
+    const g = TF_COINBASE[interval];
+    if (g) {
+      try {
+        const { data } = await http.get(`https://api.exchange.coinbase.com/products/${symbol}-USD/candles`, {
+          params: { granularity: g },
+        });
+        const rows = [...data].reverse(); // Coinbase returns newest-first: [time, low, high, open, close, volume]
+        return {
+          highs: rows.map((r) => Number(r[2])),
+          lows: rows.map((r) => Number(r[1])),
+          closes: rows.map((r) => Number(r[4])),
+          volumes: rows.map((r) => Number(r[5])),
+        };
+      } catch (e2) {
+        /* fall through */
+      }
+    }
+    console.warn(`[ohlcv] ${symbol} ${interval} failed`);
+    return null;
   }
 }
 
@@ -1043,6 +1117,141 @@ async function logTransaction({ symbol, side = "BUY", amount_lkr, price_lkr, uni
 }
 
 // ----------------------------------------------------------------------------
+// Scalping signals: multi-indicator confluence -> direction, confidence,
+// entry zone, stop, TP1/2/3 (R-multiples) with R:R and an ATR-based ETA.
+// Inspired by the indicator set in CryptoSignal/Crypto-Signal (RSI, EMA, MACD,
+// MFI, VWAP, Bollinger) — computed here in Node with no external deps.
+// ----------------------------------------------------------------------------
+const SIGNAL_TF = process.env.SIGNAL_TF || "15m";
+const SIGNAL_MIN_CONFIDENCE = Number(process.env.SIGNAL_MIN_CONFIDENCE || 45);
+
+function humanizeEta(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "—";
+  if (minutes < 60) return `~${Math.round(minutes)}m`;
+  if (minutes < 1440) return `~${(minutes / 60).toFixed(1)}h`;
+  return `~${(minutes / 1440).toFixed(1)}d`;
+}
+
+async function scalpSignal(symbol, tf, preloaded) {
+  const d = preloaded || (await getOHLCV(symbol, tf, 200));
+  if (!d || d.closes.length < 60) return { symbol, tf, error: "insufficient data" };
+  const { highs, lows, closes, volumes } = d;
+  const price = closes[closes.length - 1];
+  const ema9 = ema(closes, 9);
+  const ema21 = ema(closes, 21);
+  const ema50 = ema(closes, 50);
+  const r = rsi(closes, 14);
+  const mac = macd(closes);
+  const boll = bollinger(closes, 20, 2);
+  const a = atr(highs, lows, closes, 14);
+  const vw = vwap(highs, lows, closes, volumes);
+  const mf = mfi(highs, lows, closes, volumes, 14);
+  const swingHigh = Math.max(...highs.slice(-20));
+  const swingLow = Math.min(...lows.slice(-20));
+
+  // Confluence voting.
+  let score = 0;
+  const reasons = [];
+  if (ema9 != null && ema21 != null && ema50 != null) {
+    if (ema9 > ema21 && ema21 > ema50) { score += 2; reasons.push("EMA stack bullish (9>21>50)"); }
+    else if (ema9 < ema21 && ema21 < ema50) { score -= 2; reasons.push("EMA stack bearish (9<21<50)"); }
+  }
+  if (mac) { if (mac.hist > 0) { score += 1; reasons.push("MACD momentum up"); } else if (mac.hist < 0) { score -= 1; reasons.push("MACD momentum down"); } }
+  if (r != null) {
+    if (r < 30) { score += 1.5; reasons.push(`RSI oversold (${r.toFixed(0)})`); }
+    else if (r > 70) { score -= 1.5; reasons.push(`RSI overbought (${r.toFixed(0)})`); }
+    else score += r > 50 ? 0.5 : -0.5;
+  }
+  if (vw != null) { if (price > vw) { score += 0.5; reasons.push("Above VWAP"); } else { score -= 0.5; reasons.push("Below VWAP"); } }
+  if (boll) { if (boll.pctB < 0.1) { score += 1; reasons.push("At lower Bollinger band"); } else if (boll.pctB > 0.9) { score -= 1; reasons.push("At upper Bollinger band"); } }
+  if (mf != null) { if (mf < 20) { score += 1; reasons.push(`MFI oversold (${mf.toFixed(0)})`); } else if (mf > 80) { score -= 1; reasons.push(`MFI overbought (${mf.toFixed(0)})`); } }
+
+  const MAX = 7;
+  const confidence = Math.min(100, Math.round((Math.abs(score) / MAX) * 100));
+  const direction = confidence >= SIGNAL_MIN_CONFIDENCE ? (score > 0 ? "LONG" : "SHORT") : "NEUTRAL";
+
+  const fx = MARKET.fx;
+  const indicators = {
+    price: round(price, 4),
+    rsi14: round(r, 1),
+    macdHist: mac ? round(mac.hist, 4) : null,
+    bollingerPctB: boll ? round(boll.pctB, 3) : null,
+    vwap: round(vw, 4),
+    mfi: round(mf, 1),
+    atr: round(a, 4),
+    ema9: round(ema9, 4), ema21: round(ema21, 4), ema50: round(ema50, 4),
+    swingHigh: round(swingHigh, 4), swingLow: round(swingLow, 4),
+  };
+
+  const base = { symbol, tf, direction, confidence, priceUsd: round(price, 4), priceLkr: round(price * fx, 2), reasons, indicators, generatedAt: new Date().toISOString() };
+  if (direction === "NEUTRAL" || !a) {
+    return { ...base, note: "No high-quality setup — stand aside." };
+  }
+
+  const long = direction === "LONG";
+  const anchor = long ? Math.min(ema21 || price, vw || price) : Math.max(ema21 || price, vw || price);
+  let entryLow;
+  let entryHigh;
+  if (long) {
+    entryHigh = price;
+    entryLow = Math.max(swingLow, Math.min(anchor, price - 0.6 * a));
+    if (entryLow >= entryHigh) entryLow = price - 0.4 * a;
+  } else {
+    entryLow = price;
+    entryHigh = Math.min(swingHigh, Math.max(anchor, price + 0.6 * a));
+    if (entryHigh <= entryLow) entryHigh = price + 0.4 * a;
+  }
+  const entryMid = (entryLow + entryHigh) / 2;
+  const stop = long ? Math.min(swingLow, entryLow - a) : Math.max(swingHigh, entryHigh + a);
+  const risk = Math.abs(entryMid - stop);
+  const tfMin = TF_MINUTES[tf] || 60;
+  const perCandle = a * 0.6; // net expected progress per candle (< full ATR)
+
+  const targets = [1, 2, 3].map((k) => {
+    const tp = long ? entryMid + k * risk : entryMid - k * risk;
+    const dist = Math.abs(tp - entryMid);
+    const candles = perCandle > 0 ? dist / perCandle : Infinity;
+    return {
+      name: `TP${k}`,
+      priceUsd: round(tp, 4),
+      priceLkr: round(tp * fx, 2),
+      rr: k,
+      etaLabel: humanizeEta(candles * tfMin),
+    };
+  });
+
+  return {
+    ...base,
+    entry: { low: round(entryLow, 4), high: round(entryHigh, 4), mid: round(entryMid, 4), lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) },
+    stop: { priceUsd: round(stop, 4), priceLkr: round(stop * fx, 2), riskPct: round((risk / entryMid) * 100, 2) },
+    targets,
+    invalidation: long ? `Close below ${round(stop, 4)} (below swing low) invalidates the long.` : `Close above ${round(stop, 4)} (above swing high) invalidates the short.`,
+  };
+}
+
+// Cache signals briefly so UI refreshes don't hammer the exchanges.
+const signalCache = {};
+async function getSignals(tf) {
+  const key = tf;
+  const cached = signalCache[key];
+  if (cached && Date.now() - cached.at < 45_000) return cached.data;
+  const signals = [];
+  for (const sym of COINS) {
+    try {
+      signals.push(await scalpSignal(sym, tf));
+    } catch (e) {
+      signals.push({ symbol: sym, tf, error: e.message });
+    }
+  }
+  // Rank: actionable setups first, by confidence.
+  const rank = (s) => (s.direction === "NEUTRAL" || s.error ? -1 : s.confidence);
+  signals.sort((x, y) => rank(y) - rank(x));
+  const data = { tf, generatedAt: new Date().toISOString(), signals };
+  signalCache[key] = { at: Date.now(), data };
+  return data;
+}
+
+// ----------------------------------------------------------------------------
 // Automated monthly DCA: log the Mayer-scaled allocation as real transactions,
 // once per calendar month. Idempotent via a note tag.
 // ----------------------------------------------------------------------------
@@ -1105,12 +1314,20 @@ app.get("/api/config", (_req, res) =>
     nextDcaDate: nextDcaDate(),
     historyYears: HISTORY_YEARS,
     projectionYears: PROJECTION_YEARS,
+    signalTf: SIGNAL_TF,
+    timeframes: Object.keys(TF_MINUTES),
   }),
 );
 
 app.post("/api/refresh", wrap(async (_req, res) => {
   await refreshMarket();
   res.json({ ok: true, updatedAt: MARKET.updatedAt });
+}));
+
+// Scalping signals with entry/TP/ETA. ?tf=5m|15m|1h|4h
+app.get("/api/signals", wrap(async (req, res) => {
+  const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
+  res.json(await getSignals(tf));
 }));
 
 app.get("/api/market", wrap(async (_req, res) => {
@@ -1298,7 +1515,7 @@ function startTelegram() {
     bot.onText(/\/start/, (msg) =>
       bot.sendMessage(
         msg.chat.id,
-        "🤖 *Crypto DCA Engine*\n/portfolio – holdings & P&L\n/buy <symbol> <lkr> – log a buy\n/analyst – AI allocation\n/dca – run this month's auto-DCA now\n\nYou'll receive dip alerts and monthly auto-DCA summaries here.",
+        "🤖 *Crypto Signal Engine*\n/signals – scalping signals (entry / TP / ETA)\n/portfolio – holdings & P&L\n/buy <symbol> <lkr> – log a buy\n/analyst – AI allocation\n/dca – run this month's auto-DCA now",
         { parse_mode: "Markdown" },
       ),
     );
@@ -1337,6 +1554,26 @@ function startTelegram() {
         await bot.sendMessage(
           msg.chat.id,
           `✅ Bought ${Number(tx.units).toFixed(6)} ${tx.symbol} @ ${fmtLkr(Number(tx.price_lkr))}`,
+        );
+      } catch (e) {
+        bot.sendMessage(msg.chat.id, `⚠️ ${e.message}`);
+      }
+    });
+
+    bot.onText(/\/signals?/, async (msg) => {
+      try {
+        const { tf, signals } = await getSignals(SIGNAL_TF);
+        const lines = signals
+          .filter((s) => s.direction && s.direction !== "NEUTRAL")
+          .slice(0, 6)
+          .map((s) => {
+            const tps = (s.targets || []).map((t) => `${t.name} ${t.priceUsd} (${t.etaLabel})`).join(", ");
+            return `*${s.symbol}* ${s.direction} ${s.confidence}%\nEntry ${s.entry.low}–${s.entry.high} · SL ${s.stop.priceUsd}\n${tps}`;
+          });
+        await bot.sendMessage(
+          msg.chat.id,
+          lines.length ? `📡 *Signals* (${tf})\n\n${lines.join("\n\n")}` : `📡 No high-quality ${tf} setups right now.`,
+          { parse_mode: "Markdown" },
         );
       } catch (e) {
         bot.sendMessage(msg.chat.id, `⚠️ ${e.message}`);
@@ -1425,4 +1662,4 @@ if (require.main === module) boot();
 
 module.exports = app;
 // Exposed for unit testing of the pure decision-support math.
-module.exports._test = { macd, bollinger, annualizedVol, compositeSignal, pearson, scoreAction, maxDrawdown, mayerBand, historyBacktest, forwardProjection, MARKET, COINS };
+module.exports._test = { macd, bollinger, annualizedVol, compositeSignal, pearson, scoreAction, maxDrawdown, mayerBand, historyBacktest, forwardProjection, atr, vwap, mfi, humanizeEta, scalpSignal, MARKET, COINS };

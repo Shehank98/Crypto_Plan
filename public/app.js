@@ -18,6 +18,80 @@ async function api(path, opts) {
   return body;
 }
 
+// ---------- scalping signals ----------
+let signalTf = "15m";
+const DIR = {
+  LONG: { cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40", dot: "#10b981" },
+  SHORT: { cls: "bg-rose-500/15 text-rose-300 border-rose-500/40", dot: "#f43f5e" },
+  NEUTRAL: { cls: "bg-slate-500/15 text-slate-300 border-slate-500/40", dot: "#64748b" },
+};
+
+function renderTfButtons(tfs) {
+  const el = $("tf-buttons");
+  if (!el) return;
+  el.innerHTML = tfs
+    .map((tf) => `<button data-tf="${tf}" class="px-3 py-1.5 ${tf === signalTf ? "bg-brand text-white" : "bg-panel text-slate-300 hover:bg-edge"}">${tf}</button>`)
+    .join("");
+  el.querySelectorAll("[data-tf]").forEach((b) => (b.onclick = () => { signalTf = b.dataset.tf; renderTfButtons(tfs); loadSignals(); }));
+}
+
+async function loadSignals() {
+  try {
+    const data = await api(`/api/signals?tf=${encodeURIComponent(signalTf)}`);
+    renderSignals(data);
+  } catch (e) {
+    $("signals").innerHTML = `<p class="text-sm text-rose-400">${e.message}</p>`;
+  }
+}
+
+function fmtUsdPrice(n) {
+  if (!Number.isFinite(n)) return "—";
+  return "$" + n.toLocaleString("en-US", { maximumFractionDigits: n < 10 ? 4 : 2 });
+}
+
+function renderSignals(data) {
+  $("signals-updated").textContent = data.generatedAt ? `updated ${new Date(data.generatedAt).toLocaleTimeString()}` : "";
+  const cards = (data.signals || []).map((s) => {
+    const d = DIR[s.direction] || DIR.NEUTRAL;
+    if (s.error) {
+      return `<div class="card p-4 opacity-60"><div class="flex items-center justify-between"><span class="font-semibold" style="color:${COIN_COLORS[s.symbol] || "#fff"}">${s.symbol}</span><span class="pill bg-slate-800">no data</span></div></div>`;
+    }
+    const ind = s.indicators || {};
+    const chips = (s.reasons || []).slice(0, 4).map((r) => `<span class="pill bg-slate-800 text-slate-400">${r}</span>`).join(" ");
+    if (s.direction === "NEUTRAL" || !s.entry) {
+      return `<div class="card p-4">
+        <div class="flex items-center justify-between">
+          <span class="text-base font-bold" style="color:${COIN_COLORS[s.symbol] || "#fff"}">${s.symbol}</span>
+          <span class="pill border ${d.cls}">NEUTRAL ${s.confidence}%</span>
+        </div>
+        <p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p>
+        <p class="mt-1 text-xs text-slate-500">Price ${fmtUsdPrice(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · MFI ${ind.mfi ?? "—"}</p>
+        <div class="mt-2 flex flex-wrap gap-1">${chips}</div>
+      </div>`;
+    }
+    const tpRows = s.targets
+      .map((t) => `<div class="flex items-center justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">(${t.rr}R)</span></span><span class="tabular-nums">${fmtUsdPrice(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`)
+      .join("");
+    return `<div class="card glow p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-base font-bold" style="color:${COIN_COLORS[s.symbol] || "#fff"}">${s.symbol} <span class="text-xs font-normal text-slate-500">${s.tf}</span></span>
+        <span class="pill border ${d.cls}">${s.direction} ${s.confidence}%</span>
+      </div>
+      <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence}%;background:${d.dot}" class="h-full"></div></div>
+      <p class="mt-2 text-xs text-slate-500">Price ${fmtUsdPrice(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · MFI ${ind.mfi ?? "—"}</p>
+      <div class="mt-3 space-y-1 rounded-lg border border-edge bg-ink/50 p-2">
+        <div class="flex items-center justify-between text-sm"><span class="text-slate-400">Entry zone</span><span class="tabular-nums text-slate-100">${fmtUsdPrice(s.entry.low)} – ${fmtUsdPrice(s.entry.high)}</span></div>
+        <div class="flex items-center justify-between text-sm"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${fmtUsdPrice(s.stop.priceUsd)} <span class="text-slate-500">(-${s.stop.riskPct}%)</span></span></div>
+        <div class="my-1 border-t border-edge"></div>
+        ${tpRows}
+      </div>
+      <div class="mt-2 flex flex-wrap gap-1">${chips}</div>
+      <p class="mt-2 text-[11px] text-slate-500">${s.invalidation || ""}</p>
+    </div>`;
+  });
+  $("signals").innerHTML = cards.join("") || '<p class="text-sm text-slate-500">No signals.</p>';
+}
+
 // ---------- renderers ----------
 function renderStats(p) {
   const t = p.totals;
@@ -368,7 +442,7 @@ async function refreshAll() {
   btn.disabled = true;
   try {
     await api("/api/refresh", { method: "POST" });
-    await loadAll();
+    await Promise.all([loadAll(), loadSignals()]);
   } catch (e) {
     console.error(e);
   } finally {
@@ -402,7 +476,14 @@ async function init() {
   $("btn-import").onclick = () => { $("import-modal").classList.remove("hidden"); $("import-modal").classList.add("flex"); };
   $("import-cancel").onclick = () => { $("import-modal").classList.add("hidden"); $("import-modal").classList.remove("flex"); };
   $("import-save").onclick = doImport;
+
+  // Scalping signals (headline).
+  signalTf = CONFIG.signalTf || "15m";
+  renderTfButtons(CONFIG.timeframes || ["5m", "15m", "1h", "4h"]);
+  loadSignals();
+  setInterval(loadSignals, 60000); // signals refresh every minute
+
   await loadAll();
-  setInterval(loadAll, 120000); // gentle auto-refresh
+  setInterval(loadAll, 120000); // portfolio/market refresh
 }
 init();

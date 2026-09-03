@@ -10,6 +10,23 @@ Chart.js). Deploys to **Railway** as a single service.
 Every other feed is free & keyless: Binance, CoinGecko (fallback), Alternative.me Fear &
 Greed, CoinDesk/Cointelegraph RSS, DefiLlama, ExchangeRate (USD→LKR).
 
+## Scalping signals (headline)
+
+Quality intraday trade signals via multi-indicator **confluence** (EMA stack, RSI,
+MACD, Bollinger %B, VWAP, MFI — the indicator set popularised by
+[CryptoSignal/Crypto-Signal](https://github.com/CryptoSignal/Crypto-Signal), implemented
+here in Node). Each coin returns:
+
+- **Direction** (LONG / SHORT / NEUTRAL) with a **confidence** score, or "stand aside".
+- **Entry zone** (a pullback range, not a single price).
+- **Stop** (below/above structure, with % risk) and **invalidation** note.
+- **TP1 / TP2 / TP3** at 1R / 2R / 3R with **estimated time-to-target** (ATR-based ETA).
+- The reasons behind the call (the indicators that voted).
+
+Timeframes: `5m / 15m / 1h / 4h` (selector on the dashboard; `GET /api/signals?tf=15m`;
+`/signals` on Telegram). Tune with `SIGNAL_TF` and `SIGNAL_MIN_CONFIDENCE`.
+_Signals are educational, not financial advice — always use your own stop._
+
 ## Feature modules
 
 - **A — DCA & VWAP tracker:** per-coin VWAP cost basis, unrealized/realized P&L in LKR & USD,
@@ -50,6 +67,8 @@ This is one service built from the root `Dockerfile` (no monorepo, no Root Direc
    | `TELEGRAM_CHAT_ID` | optional | — | Extra chat/channel id for alerts (chats that message the bot are auto-added) |
    | `COINS` | optional | `BTC,ETH,SOL,BNB` | **Comma-separated symbols — add as many coins as you want** (Binance `<SYM>USDT`) |
    | `COIN_IDS` | optional | — | JSON to extend the symbol→CoinGecko-id map for coins outside the built-in list |
+   | `SIGNAL_TF` | optional | `15m` | Default signal timeframe (`5m`/`15m`/`1h`/`4h`) |
+   | `SIGNAL_MIN_CONFIDENCE` | optional | `45` | Min confluence % to emit LONG/SHORT (lower = more signals) |
    | `HISTORY_YEARS` | optional | `5` | Years of history analysed for the backtest (try `10`) |
    | `PROJECTION_YEARS` | optional | `3` | Forward projection horizon in years |
    | `MONTHLY_BUDGET_LKR` | optional | `10000` | Monthly DCA budget |
@@ -75,7 +94,8 @@ This is one service built from the root `Dockerfile` (no monorepo, no Root Direc
 
 ## API
 
-`/api/health` · `/api/config` · `/api/market` · `POST /api/refresh` · `/api/portfolio` ·
+`/api/health` · `/api/config` · `/api/signals?tf=15m` (scalping signals) · `/api/market` ·
+`POST /api/refresh` · `/api/portfolio` ·
 `/api/transactions` (GET/POST, `PUT|DELETE /:id`) · `POST /api/import` ·
 `GET /api/export?format=csv|json` · `/api/projection` · `/api/sentiment` · `/api/news` ·
 `/api/onchain` · `/api/analyst` (GET latest, POST to generate) · `/api/analyst/history` ·
