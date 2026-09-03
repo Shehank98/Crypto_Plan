@@ -1,127 +1,78 @@
-# ⚡ Crypto DCA & Intelligent Portfolio Engine
+# 📡 Crypto Signal Engine
 
-A monolithic **Node.js + Express + PostgreSQL** app that tracks a multi-currency crypto
-DCA strategy (BTC/ETH/SOL/BNB, budgeted in **LKR**), scales contributions by the **Mayer
-Multiple**, suggests take-profit ladders, and produces an **AI analyst** report — with an
-embedded **Telegram bot** and a dark, real-time **dashboard** (vanilla JS + Tailwind +
-Chart.js). Deploys to **Railway** as a single service.
+A **signals-only** crypto scalping/day-trading engine. It scans the **top-N most-liquid
+markets**, and for each emits a **trend-following** trade signal:
 
-**Only paid key:** `GEMINI_API_KEY` (optional — a rule-based analyst runs without it).
-Every other feed is free & keyless: Binance, CoinGecko (fallback), Alternative.me Fear &
-Greed, CoinDesk/Cointelegraph RSS, DefiLlama, ExchangeRate (USD→LKR).
+- **Direction** — LONG / SHORT / NEUTRAL, with a **confidence** score
+- **Entry zone** (a pullback range) + a **READY / WAIT** status
+- **Stop** (below/above structure) with **% risk** and an invalidation note
+- **TP1 / TP2 / TP3** at 1R / 2R / 3R, each with an **ATR-based ETA**
+- A short-horizon **price forecast** (predicted price + range)
+- The **reasons** behind the call
 
-## Scalping signals (headline)
+No database, no portfolio, no accounts — just signals. One Node service, static
+dashboard, Telegram optional.
 
-Quality intraday trade signals via multi-indicator **confluence** (EMA stack, RSI,
-MACD, Bollinger %B, VWAP, MFI — the indicator set popularised by
-[CryptoSignal/Crypto-Signal](https://github.com/CryptoSignal/Crypto-Signal), implemented
-here in Node). Each coin returns:
+## How signals work
 
-- **Direction** (LONG / SHORT / NEUTRAL) with a **confidence** score, or "stand aside".
-- **Entry zone** (a pullback range, not a single price).
-- **Stop** (below/above structure, with % risk) and **invalidation** note.
-- **TP1 / TP2 / TP3** at 1R / 2R / 3R with **estimated time-to-target** (ATR-based ETA).
-- The reasons behind the call (the indicators that voted).
+Design informed by how **freqtrade** (regime filter → entry/exit → time-based targets),
+**hummingbot** (multi-pair scanning), **ccxt** (unified market data) and **QuantDinger**
+(indicator markers) operate — reimplemented from scratch in Node (no external trading
+libraries).
 
-Timeframes: `5m / 15m / 1h / 4h` (selector on the dashboard; `GET /api/signals?tf=15m`;
-`/signals` on Telegram). Tune with `SIGNAL_TF` and `SIGNAL_MIN_CONFIDENCE`.
-_Signals are educational, not financial advice — always use your own stop._
+1. **Regime filter (trend):** a coin is in an uptrend when `price > EMA200` and
+   `EMA50 > EMA200` (downtrend = mirror). Otherwise it's ranging → NEUTRAL.
+2. **Confidence** is built from trend confirmation: EMA alignment, MACD momentum with the
+   trend, price on the trend side of VWAP, trend strength (EMA separation / ATR), and RSI
+   health. Being *overbought in an uptrend keeps the LONG* (it just nudges toward waiting
+   for a pullback) — it does **not** flip you short. That's why you get real signals, not
+   endless NEUTRAL.
+3. **Trade plan:** entry zone around the EMA20/VWAP pullback, stop beyond the recent swing
+   (± ATR), TP1/2/3 at 1R/2R/3R, ETA from ATR velocity, and a drift+ATR price forecast.
 
-## Feature modules
+Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI.
 
-- **A — DCA & VWAP tracker:** per-coin VWAP cost basis, unrealized/realized P&L in LKR & USD,
-  manual logging, CSV/JSON import & export.
-- **B — Mayer Multiple scaler:** 200-day SMA + Mayer Multiple → dynamic budget multiplier
-  (1.3× dip / 1.0× baseline / 0.8× extended / 0.5× top with reserve diversion) and 3-tier
-  Fibonacci support ladders for staggered limit buys.
-- **C — Dollar-cost selling:** 2×/3×/5× take-profit targets from VWAP with sell suggestions.
-- **D — Gemini analyst:** portfolio + Fear&Greed + SMA/Mayer/RSI/MACD/Bollinger +
-  composite signals + risk + news + DefiLlama TVL → structured JSON (`responseSchema`),
-  stored in `ai_reports`. **Accuracy tracking** scores every past report against subsequent
-  price moves (overall hit-rate + per-action) using the saved `snapshot_json`.
-- **Professional decision support:** per-coin **composite signal score (0–100)** blending
-  Mayer, RSI, Bollinger %B, MACD and trend into a STRONG_ACCUMULATE…TAKE_PROFIT label;
-  plus **portfolio risk analytics** — annualized return/volatility, Sharpe, Sortino, max
-  drawdown, a **coin correlation matrix**, **inverse-volatility (risk-parity) target
-  weights** with rebalance actions, and per-coin **DCA discount** (price vs VWAP).
-- **E — Telegram bot:** `/start`, `/portfolio`, `/buy <sym> <lkr>`, `/analyst`, `/dca`.
-  Every chat that messages the bot is remembered, so the **6-hour dip alerts** and
-  **monthly auto-DCA summaries** broadcast to all of them (plus `TELEGRAM_CHAT_ID`).
-- **Auto-DCA:** on `DCA_DAY_OF_MONTH` the engine logs the Mayer-scaled allocation as real
-  transactions automatically (idempotent — once per month). Toggle with `AUTO_DCA`; trigger
-  now via `/dca` or `POST /api/auto-dca`.
-- **F — Dashboard:** stat cards, allocation donut, DCA-vs-lump line, 3-year projection
-  bands, AI feed, ladder matrix, and an editable transactions table.
+## Data sources (free, keyless)
 
-## Deploy to Railway
+- **Universe + OHLCV:** Binance public API (primary) → Coinbase (fallback).
+- **USD→LKR:** open.er-api.com (display only).
 
-This is one service built from the root `Dockerfile` (no monorepo, no Root Directory to set).
+> Whole-market scanning needs Binance reachable from your host region. If Binance is
+> geo-blocked, the app falls back to Coinbase for major coins (fewer pairs, shallower).
 
-1. **Create the project** from this repo. Add the **PostgreSQL** plugin (exposes `DATABASE_URL`).
-2. **Service → Variables:**
-   | Variable | Required | Default | Notes |
-   |---|---|---|---|
-   | `DATABASE_URL` | ✅ **required** | — | Reference the plugin: `${{Postgres.DATABASE_URL}}` |
-   | `GEMINI_API_KEY` | optional | — | The only paid key. Enables the real Gemini 2.5 Flash analyst; omit → rule-based analyst |
-   | `TELEGRAM_BOT_TOKEN` | optional | — | From @BotFather; enables the bot (polling) |
-   | `TELEGRAM_CHAT_ID` | optional | — | Extra chat/channel id for alerts (chats that message the bot are auto-added) |
-   | `COINS` | optional | `BTC,ETH,SOL,BNB` | **Comma-separated symbols — add as many coins as you want** (Binance `<SYM>USDT`) |
-   | `COIN_IDS` | optional | — | JSON to extend the symbol→CoinGecko-id map for coins outside the built-in list |
-   | `SIGNAL_TF` | optional | `15m` | Default signal timeframe (`5m`/`15m`/`1h`/`4h`) |
-   | `SIGNAL_MIN_CONFIDENCE` | optional | `45` | Min confluence % to emit LONG/SHORT (lower = more signals) |
-   | `HISTORY_YEARS` | optional | `5` | Years of history analysed for the backtest (try `10`) |
-   | `PROJECTION_YEARS` | optional | `3` | Forward projection horizon in years |
-   | `MONTHLY_BUDGET_LKR` | optional | `10000` | Monthly DCA budget |
-   | `DCA_DAY_OF_MONTH` | optional | `1` | Day auto-DCA runs |
-   | `AUTO_DCA` | optional | `true` | `false` to disable the automatic monthly buys |
-   | `FALLBACK_USD_LKR` | optional | `300` | Used only if the FX API is unreachable |
-   | `PORT` | optional | injected | Railway sets this automatically |
+## Deploy to Railway (one service, no DB)
 
-   **The only variable you must set is `DATABASE_URL`.** Everything else has sensible defaults.
-3. **Deploy.** On boot the server auto-applies `schema.sql` (idempotent — no manual step),
-   warms the market cache, starts the cron jobs, and (if a token is set) the Telegram bot.
-4. **Generate a domain** and open it — the dashboard is served at `/`.
+1. Create a service from this repo (Dockerfile build; leave Root Directory empty).
+2. Optionally set the variables below. **Nothing is required** — it runs with defaults.
+3. Deploy → Generate Domain → open it.
 
-`PORT` is injected by Railway; the app listens on it automatically.
+### Environment variables (all optional)
 
-## Database schema (`schema.sql`)
-
-- `transactions` — every buy/sell (`side`, `amount_lkr`, `units`, `price_lkr`, `fee_lkr`).
-- `ai_reports` — stored analyst outputs (`report_json`, `snapshot_json`) for accuracy tracking.
-- `price_cache` — per-symbol spot + `sma_200`/`sma_50`/`ema_20`/`rsi_14`/`mayer_multiple` +
-  ladder, refreshed by cron. Applied automatically on startup; `gen_random_uuid()` requires
-  PostgreSQL 13+ (Railway is 15/16).
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | injected | Railway sets it |
+| `UNIVERSE_SIZE` | `50` | How many top markets to scan |
+| `QUOTE` | `USDT` | Quote asset for pairs |
+| `SIGNAL_TF` | `1h` | Default timeframe: `5m`/`15m`/`1h`/`4h` |
+| `SIGNAL_MIN_CONFIDENCE` | `45` | Min % to emit LONG/SHORT (lower = more signals) |
+| `SCAN_INTERVAL_MIN` | `5` | Background rescan cadence |
+| `FALLBACK_USD_LKR` | `300` | FX fallback for LKR display |
+| `TELEGRAM_BOT_TOKEN` | – | Enables the Telegram bot (`/signals`, `/signal <SYM>`) |
+| `TELEGRAM_CHAT_ID` | – | Optional alert target; chats that message the bot auto-register |
 
 ## API
 
-`/api/health` · `/api/config` · `/api/signals?tf=15m` (scalping signals) · `/api/market` ·
-`POST /api/refresh` · `/api/portfolio` ·
-`/api/transactions` (GET/POST, `PUT|DELETE /:id`) · `POST /api/import` ·
-`GET /api/export?format=csv|json` · `/api/projection` · `/api/sentiment` · `/api/news` ·
-`/api/onchain` · `/api/analyst` (GET latest, POST to generate) · `/api/analyst/history` ·
-`/api/analyst/accuracy` (hit-rate of past recommendations) · `/api/analytics` (risk,
-correlation, risk-parity targets, rebalance, DCA discount) ·
-`POST /api/auto-dca` (run this month's Mayer-scaled DCA; `{"force":true}` to re-run).
+- `GET /api/health`
+- `GET /api/config`
+- `GET /api/signals?tf=1h&only=actionable&dir=LONG&limit=20` — the market scan (cached ~60s)
+- `GET /api/signal/:symbol?tf=1h` — one coin, computed fresh
+- `POST /api/rescan?tf=1h` — force a fresh scan
 
-Log a purchase (price auto-fetched live if omitted):
-```bash
-curl -X POST $URL/api/transactions -H 'content-type: application/json' \
-  -d '{"symbol":"BTC","amount_lkr":2500}'
-```
-
-## Local development
+## Local dev
 
 ```bash
-cp .env.example .env          # set DATABASE_URL (a local or Railway Postgres)
 npm install
-npm start                     # http://localhost:3000
+npm start        # http://localhost:3000
 ```
 
-Notes:
-- The dashboard populates fully once outbound calls to Binance/CoinGecko succeed (they need
-  internet; some sandboxes block them). Portfolio math, logging, import/export, and the
-  rule-based analyst work regardless.
-- The Gemini and Telegram integrations are optional and fail-safe: missing keys simply
-  disable those features, and the rest of the app keeps working.
-
-_Not financial advice._
+_Educational only — not financial advice. Always trade with your own stop and risk limits._

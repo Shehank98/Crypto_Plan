@@ -1,24 +1,20 @@
 {
-  "name": "crypto-dca-engine",
-  "version": "1.0.0",
+  "name": "crypto-signal-engine",
+  "version": "2.0.0",
   "private": true,
-  "description": "Crypto DCA & Intelligent Portfolio Engine — monolithic Express server + PostgreSQL + vanilla dashboard.",
+  "description": "Signals-only crypto scalping engine — scans the top markets and emits trend-following trade signals (entry, stop, TP, ETA, forecast). No database.",
   "main": "server.js",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "start": "node server.js",
-    "init-db": "node -e \"require('./server.js')\""
+    "start": "node server.js"
   },
   "dependencies": {
-    "@google/genai": "^2.19.0",
     "axios": "^1.20.0",
     "dotenv": "^17.4.2",
     "express": "^4.22.2",
     "node-cron": "^4.6.0",
-    "node-telegram-bot-api": "^0.66.0",
-    "pg": "^8.23.0",
-    "rss-parser": "^3.13.0"
+    "node-telegram-bot-api": "^0.66.0"
   }
 }
