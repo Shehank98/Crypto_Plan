@@ -32,13 +32,25 @@ libraries).
 
 Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI.
 
-## Data sources (free, keyless)
+## Data sources (free, keyless) — multi-exchange
 
-- **Universe + OHLCV:** Binance public API (primary) → Coinbase (fallback).
-- **USD→LKR:** open.er-api.com (display only).
+A minimal ccxt-style layer auto-detects the first reachable exchange and scans the whole
+market from it: **Binance → Bybit → OKX** (order set by `EXCHANGES`), with **Coinbase** as a
+per-coin fallback. This means whole-market scanning still works where Binance is
+geo-blocked. USD→LKR from open.er-api.com (display only). The active source is shown in the
+header and `/api/config`.
 
-> Whole-market scanning needs Binance reachable from your host region. If Binance is
-> geo-blocked, the app falls back to Coinbase for major coins (fewer pairs, shallower).
+## Signal outcome tracking (trust)
+
+Every high-confidence signal (≥ `TRACK_MIN_CONFIDENCE`) is **logged and then monitored every
+minute**: did price reach the entry zone, then TP1 / TP2 / TP3, or the stop? From that the
+app computes a live **track record** — win rate, TP1/2/3 hit rates, average R — shown on the
+dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
+
+- **Durable** when `DATABASE_URL` (Railway Postgres plugin) is set — history survives
+  restarts. Without it, tracking is in-memory and resets on redeploy.
+- A signal is a **WIN** if it reaches ≥ TP1 before the stop, **LOSS** if stopped first,
+  **EXPIRED** if entry never fills or it times out (`MAX_WAIT_CANDLES` / `MAX_HOLD_CANDLES`).
 
 ## Deploy to Railway (one service, no DB)
 
@@ -67,6 +79,8 @@ Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI.
 - `GET /api/signals?tf=1h&only=actionable&dir=LONG&limit=20` — the market scan (cached ~60s)
 - `GET /api/signal/:symbol?tf=1h` — one coin, computed fresh
 - `POST /api/rescan?tf=1h` — force a fresh scan
+- `GET /api/stats` — track record (win rate, TP hit rates, avg R)
+- `GET /api/tracked` — open (live) + recently-resolved signals
 
 ## Local dev
 

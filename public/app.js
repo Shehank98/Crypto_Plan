@@ -70,17 +70,66 @@ function render() {
   } else empty.classList.add("hidden");
 }
 
+const STATUS_CLS = { WIN: "text-emerald-400", LOSS: "text-rose-400", EXPIRED: "text-slate-400", ACTIVE: "text-sky-400", WAITING: "text-amber-400" };
+
+function renderStats(s) {
+  const chip = (label, val, cls) => `<span class="pill border border-edge bg-panel px-3 py-1.5 text-slate-300">${label} <b class="${cls || "text-white"}">${val}</b></span>`;
+  const wr = s.winRatePct;
+  $("stats").innerHTML = [
+    chip("Win rate", wr == null ? "—" : wr + "%", wr == null ? "" : wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-sky-400" : "text-rose-400"),
+    chip("Decided", s.decided),
+    chip("TP1", (s.tp1RatePct ?? "—") + "%"),
+    chip("TP2", (s.tp2RatePct ?? "—") + "%"),
+    chip("TP3", (s.tp3RatePct ?? "—") + "%"),
+    chip("Avg R", s.avgResultR ?? "—", s.avgResultR > 0 ? "text-emerald-400" : s.avgResultR < 0 ? "text-rose-400" : ""),
+    chip("Open", s.open),
+  ].join(" ");
+  $("track-note").textContent = s.durable ? "" : "· in-memory (set DATABASE_URL to persist across restarts)";
+}
+
+function renderTracked(t) {
+  const openRows = (t.open || []).map((x) => `<tr class="border-b border-edge/60">
+      <td class="py-1.5 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
+      <td class="py-1.5"><span class="pill ${x.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
+      <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}${x.tp1_hit ? " · TP1" : ""}${x.tp2_hit ? "·TP2" : ""}</td>
+      <td class="py-1.5 text-right tabular-nums">${x.currentPrice != null ? usd(x.currentPrice) : "—"}</td>
+      <td class="py-1.5 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? x.openR + "R" : "—"}</td>
+    </tr>`).join("");
+  $("open-table").innerHTML = (t.open || []).length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Dir</th><th>Status</th><th class="text-right">Price</th><th class="text-right">Open R</th></tr></thead><tbody>${openRows}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No open tracked signals yet. High-confidence setups are logged automatically.</td></tr></tbody>';
+
+  const recRows = (t.recent || []).map((x) => `<tr class="border-b border-edge/60">
+      <td class="py-1.5 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
+      <td class="py-1.5">${x.direction} <span class="text-slate-600">${x.tf}</span></td>
+      <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}</td>
+      <td class="py-1.5 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? x.result_r + "R" : "—"}</td>
+    </tr>`).join("");
+  $("recent-table").innerHTML = (t.recent || []).length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Dir</th><th>Result</th><th class="text-right">R</th></tr></thead><tbody>${recRows}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No closed results yet — check back as signals resolve.</td></tr></tbody>';
+}
+
+async function loadTrack() {
+  try {
+    const [s, t] = await Promise.all([api("/api/stats"), api("/api/tracked")]);
+    renderStats(s);
+    renderTracked(t);
+  } catch (e) { /* ignore */ }
+}
+
 async function load() {
   try {
     const data = await api(`/api/signals?tf=${encodeURIComponent(tf)}`);
     last = data;
     $("updated").textContent = data.generatedAt ? `updated ${new Date(data.generatedAt).toLocaleTimeString()}` : "";
-    $("summary").textContent = `${data.actionable} setups · scanned ${data.universe} coins · ${tf}`;
+    $("summary").textContent = `${data.actionable} setups · scanned ${data.universe} coins · ${tf}${data.source ? " · " + data.source : ""}`;
     render();
   } catch (e) {
     $("empty").classList.remove("hidden");
     $("empty").textContent = e.message;
   }
+  loadTrack();
 }
 
 async function rescan() {

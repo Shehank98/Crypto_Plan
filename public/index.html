@@ -37,8 +37,22 @@
       <span id="summary" class="ml-auto text-xs text-slate-400"></span>
     </div>
 
+    <!-- Track record -->
+    <div id="stats" class="mb-4 flex flex-wrap gap-2"></div>
+
     <div id="signals" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"></div>
     <p id="empty" class="hidden py-16 text-center text-slate-500"></p>
+
+    <!-- Tracked signals (live + results) -->
+    <section class="mt-8">
+      <div class="mb-2 flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-white">🎯 Track record <span id="track-note" class="text-xs font-normal text-slate-500"></span></h2>
+      </div>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="card p-4"><h3 class="mb-2 text-sm font-semibold text-slate-300">Live / open</h3><div class="overflow-x-auto"><table class="w-full text-sm" id="open-table"></table></div></div>
+        <div class="card p-4"><h3 class="mb-2 text-sm font-semibold text-slate-300">Recent results</h3><div class="overflow-x-auto"><table class="w-full text-sm" id="recent-table"></table></div></div>
+      </div>
+    </section>
 
     <p class="mt-8 text-center text-xs text-slate-500">
       Free data: Binance · Coinbase · ExchangeRate. Trend-following signals are educational, not financial advice — always use your own stop.
