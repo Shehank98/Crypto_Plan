@@ -32,15 +32,16 @@ function card(s) {
   if (s.error) return `<div class="card p-4 opacity-50"><div class="flex justify-between"><b style="color:${coinColor(s.symbol)}">${s.symbol}</b><span class="pill bg-slate-800">no data</span></div></div>`;
   const ind = s.indicators || {};
   const chips = (s.reasons || []).slice(0, 3).map((r) => `<span class="pill bg-slate-800 text-slate-400">${r}</span>`).join(" ");
+  const chartBtn = `<button data-chart="${s.symbol}" data-tf="${s.tf}" class="rounded-md border border-edge bg-panel px-2 py-1 text-xs text-slate-300 hover:bg-edge">📈 Chart</button>`;
   const head = `<div class="flex items-center justify-between">
       <span class="text-base font-bold" style="color:${coinColor(s.symbol)}">${s.symbol}<span class="ml-1 text-xs font-normal text-slate-500">${s.tf}${s.changePct != null ? ` · ${s.changePct > 0 ? "+" : ""}${s.changePct}%/24h` : ""}</span></span>
       <span class="pill border ${d.cls}">${s.direction} ${s.confidence}%</span>
     </div>
     <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence}%;background:${d.bar}" class="h-full"></div></div>
-    <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · MFI ${ind.mfi ?? "—"}</p>`;
+    <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · ADX ${ind.adx ?? "—"} · StochRSI ${ind.stochRsi ?? "—"} · MFI ${ind.mfi ?? "—"}</p>`;
 
   if (s.direction === "NEUTRAL" || !s.entry) {
-    return `<div class="card p-4">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex flex-wrap gap-1">${chips}</div></div>`;
+    return `<div class="card p-4">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div>${chartBtn}</div></div>`;
   }
   const readyCls = s.entry.status === "READY" ? "text-emerald-300" : "text-amber-300";
   const tps = s.targets.map((t) => `<div class="flex justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums">${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("");
@@ -52,7 +53,7 @@ function card(s) {
       <div class="flex justify-between text-sm"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${usd(s.stop.priceUsd)} <span class="text-slate-500">-${s.stop.riskPct}%</span></span></div>
       <div class="my-1 border-t border-edge"></div>${tps}
     </div>
-    <div class="mt-2 flex flex-wrap gap-1">${chips}</div>
+    <div class="mt-2 flex items-center justify-between gap-2"><div class="flex flex-wrap gap-1">${chips}</div>${chartBtn}</div>
     <p class="mt-2 text-[11px] text-slate-500">${s.invalidation || ""}</p>
   </div>`;
 }
@@ -63,6 +64,7 @@ function render() {
   else if (filter === "LONG" || filter === "SHORT") list = list.filter((s) => s.direction === filter);
   if (search) list = list.filter((s) => s.symbol.includes(search.toUpperCase()));
   $("signals").innerHTML = list.map(card).join("");
+  $("signals").querySelectorAll("[data-chart]").forEach((b) => (b.onclick = () => openChart(b.dataset.chart, b.dataset.tf)));
   const empty = $("empty");
   if (!list.length) {
     empty.classList.remove("hidden");
@@ -135,6 +137,67 @@ async function loadTrack() {
   } catch (e) { /* ignore */ }
 }
 
+// ---------- chart (Lightweight Charts) ----------
+let chartApi = null;
+function emaSeries(closes, times, p) {
+  if (closes.length < p) return [];
+  const k = 2 / (p + 1);
+  let e = closes.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  const out = [{ time: times[p - 1], value: e }];
+  for (let i = p; i < closes.length; i++) { e = closes[i] * k + e * (1 - k); out.push({ time: times[i], value: e }); }
+  return out;
+}
+function closeChart() {
+  if (chartApi) { try { chartApi.remove(); } catch (e) {} chartApi = null; }
+  const m = $("chart-modal"); m.classList.add("hidden"); m.classList.remove("flex");
+}
+async function openChart(sym, tfv) {
+  if (typeof LightweightCharts === "undefined") { alert("Chart library still loading — try again in a moment."); return; }
+  const m = $("chart-modal"); m.classList.remove("hidden"); m.classList.add("flex");
+  $("chart-title").innerHTML = `<span style="color:${coinColor(sym)}">${sym}</span> · ${tfv}`;
+  $("chart-plan").innerHTML = "";
+  const el = $("chart"); el.innerHTML = "";
+  closeChart._pending = sym + tfv;
+  let data;
+  try { data = await api(`/api/candles/${sym}?tf=${encodeURIComponent(tfv)}&limit=300`); }
+  catch (e) { el.innerHTML = `<p class="p-6 text-sm text-rose-400">${e.message}</p>`; return; }
+  if (closeChart._pending !== sym + tfv) return; // superseded
+  m.classList.remove("hidden"); m.classList.add("flex");
+  const c = LightweightCharts.createChart(el, {
+    width: el.clientWidth, height: 440,
+    layout: { background: { color: "#0b0e14" }, textColor: "#94a3b8" },
+    grid: { vertLines: { color: "#161b26" }, horzLines: { color: "#1e2532" } },
+    rightPriceScale: { borderColor: "#1e2532" },
+    timeScale: { borderColor: "#1e2532", timeVisible: true },
+    crosshair: { mode: 0 },
+  });
+  chartApi = c;
+  const cs = c.addCandlestickSeries({ upColor: "#10b981", downColor: "#f43f5e", wickUpColor: "#10b981", wickDownColor: "#f43f5e", borderVisible: false });
+  cs.setData(data.candles.map((k) => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
+  const closes = data.candles.map((k) => k.close), times = data.candles.map((k) => k.time);
+  [[20, "#818cf8"], [50, "#22d3ee"], [200, "#f59e0b"]].forEach(([p, col]) => { const s = c.addLineSeries({ color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }); s.setData(emaSeries(closes, times, p)); });
+  $("chart-legend").classList.remove("hidden");
+  $("chart-legend").innerHTML = `EMA <span style="color:#818cf8">20</span> <span style="color:#22d3ee">50</span> <span style="color:#f59e0b">200</span>`;
+
+  const sig = (last.signals || []).find((x) => x.symbol === sym);
+  if (sig && sig.entry) {
+    const line = (price, color, style, title) => cs.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title });
+    line(sig.entry.low, "#818cf8", 2, "Entry");
+    line(sig.entry.high, "#818cf8", 2, "");
+    line(sig.stop.priceUsd, "#f43f5e", 0, "Stop");
+    sig.targets.forEach((t) => line(t.priceUsd, "#10b981", 2, `${t.name} (${t.rr}R)`));
+    $("chart-plan").innerHTML = [
+      `<span class="pill ${sig.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${sig.direction} ${sig.confidence}%</span>`,
+      `<span class="pill bg-slate-800">Entry ${usd(sig.entry.low)}–${usd(sig.entry.high)}</span>`,
+      `<span class="pill bg-slate-800 text-rose-300">Stop ${usd(sig.stop.priceUsd)} (-${sig.stop.riskPct}%)</span>`,
+      ...sig.targets.map((t) => `<span class="pill bg-slate-800 text-emerald-300">${t.name} ${usd(t.priceUsd)} ${t.etaLabel}</span>`),
+    ].join(" ");
+  } else {
+    $("chart-plan").innerHTML = '<span class="pill bg-slate-800 text-slate-400">No active setup — chart for reference.</span>';
+  }
+  c.timeScale().fitContent();
+}
+
 async function load() {
   try {
     const data = await api(`/api/signals?tf=${encodeURIComponent(tf)}`);
@@ -183,6 +246,8 @@ async function init() {
   seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
   $("search").oninput = (e) => { search = e.target.value.trim(); render(); };
   $("btn-refresh").onclick = rescan;
+  $("chart-close").onclick = closeChart;
+  $("chart-modal").onclick = (e) => { if (e.target.id === "chart-modal") closeChart(); };
   await load();
   const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live auto-refresh
   setInterval(load, ms);

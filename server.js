@@ -60,6 +60,34 @@ function bollinger(v, p = 20, mult = 2) { if (!v || v.length < p) return null; c
 function atr(h, l, c, p = 14) { if (!c || c.length < p + 1) return null; const tr = []; for (let i = 1; i < c.length; i++) tr.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]))); return sma(tr, p); }
 function vwap(h, l, c, vol) { let pv = 0, v = 0; for (let i = 0; i < c.length; i++) { const tp = (h[i] + l[i] + c[i]) / 3; pv += tp * (vol[i] || 0); v += vol[i] || 0; } return v ? pv / v : null; }
 function mfi(h, l, c, vol, p = 14) { if (!c || c.length < p + 1) return null; let pos = 0, neg = 0; for (let i = c.length - p; i < c.length; i++) { const tp = (h[i] + l[i] + c[i]) / 3, ptp = (h[i - 1] + l[i - 1] + c[i - 1]) / 3; const mf = tp * (vol[i] || 0); if (tp > ptp) pos += mf; else if (tp < ptp) neg += mf; } if (neg === 0) return 100; return 100 - 100 / (1 + pos / neg); }
+// ADX (Wilder) — trend strength; filters choppy markets.
+function adx(h, l, c, p = 14) {
+  if (!c || c.length < p * 2 + 1) return null;
+  const tr = [], pdm = [], mdm = [];
+  for (let i = 1; i < c.length; i++) {
+    const up = h[i] - h[i - 1], dn = l[i - 1] - l[i];
+    pdm.push(up > dn && up > 0 ? up : 0);
+    mdm.push(dn > up && dn > 0 ? dn : 0);
+    tr.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])));
+  }
+  const wilder = (arr) => { let s = arr.slice(0, p).reduce((a, b) => a + b, 0); const out = [s]; for (let i = p; i < arr.length; i++) { s = s - s / p + arr[i]; out.push(s); } return out; };
+  const trS = wilder(tr), pS = wilder(pdm), mS = wilder(mdm);
+  const dx = [];
+  for (let i = 0; i < trS.length; i++) { if (!trS[i]) { dx.push(0); continue; } const pdi = 100 * pS[i] / trS[i], mdi = 100 * mS[i] / trS[i]; dx.push(pdi + mdi === 0 ? 0 : 100 * Math.abs(pdi - mdi) / (pdi + mdi)); }
+  if (dx.length < p) return null;
+  let a = dx.slice(0, p).reduce((x, y) => x + y, 0) / p;
+  for (let i = p; i < dx.length; i++) a = (a * (p - 1) + dx[i]) / p;
+  return a;
+}
+// Stochastic RSI (0..1) — momentum timing.
+function stochRsi(c, p = 14) {
+  if (!c || c.length < p * 2) return null;
+  const rs = [];
+  for (let i = p; i < c.length; i++) rs.push(rsi(c.slice(0, i + 1), p));
+  if (rs.length < p) return null;
+  const recent = rs.slice(-p), mn = Math.min(...recent), mx = Math.max(...recent), last = rs[rs.length - 1];
+  return mx > mn ? (last - mn) / (mx - mn) : 0.5;
+}
 
 // ===========================================================================
 // FX (USD -> LKR)
@@ -106,7 +134,7 @@ const adapters = {
     },
     async klines(base, tf, limit) {
       const data = await binanceGet("/api/v3/klines", { symbol: base + QUOTE, interval: tf, limit });
-      return { highs: data.map((k) => +k[2]), lows: data.map((k) => +k[3]), closes: data.map((k) => +k[4]), volumes: data.map((k) => +k[5]) };
+      return { times: data.map((k) => +k[0]), opens: data.map((k) => +k[1]), highs: data.map((k) => +k[2]), lows: data.map((k) => +k[3]), closes: data.map((k) => +k[4]), volumes: data.map((k) => +k[5]) };
     },
   },
   bybit: {
@@ -119,7 +147,7 @@ const adapters = {
       const iv = { "5m": "5", "15m": "15", "1h": "60", "4h": "240" }[tf];
       const { data } = await http.get("https://api.bybit.com/v5/market/kline", { params: { category: "spot", symbol: base + QUOTE, interval: iv, limit } });
       const rows = [...(data.result?.list || [])].reverse(); // [start,open,high,low,close,volume,turnover]
-      return { highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[3]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
+      return { times: rows.map((r) => +r[0]), opens: rows.map((r) => +r[1]), highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[3]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
     },
   },
   okx: {
@@ -132,7 +160,7 @@ const adapters = {
       const bar = { "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H" }[tf];
       const { data } = await http.get("https://www.okx.com/api/v5/market/candles", { params: { instId: base + "-" + QUOTE, bar, limit } });
       const rows = [...(data.data || [])].reverse(); // [ts,o,h,l,c,vol,...]
-      return { highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[3]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
+      return { times: rows.map((r) => +r[0]), opens: rows.map((r) => +r[1]), highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[3]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
     },
   },
 };
@@ -159,8 +187,8 @@ async function coinbaseKlines(base, tf) {
   if (!g) return null;
   try {
     const { data } = await http.get(`https://api.exchange.coinbase.com/products/${base}-USD/candles`, { params: { granularity: g } });
-    const rows = [...data].reverse();
-    return { highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[1]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
+    const rows = [...data].reverse(); // [time(s),low,high,open,close,vol]
+    return { times: rows.map((r) => +r[0] * 1000), opens: rows.map((r) => +r[3]), highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[1]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
   } catch (e) { return null; }
 }
 
@@ -205,6 +233,7 @@ function computeSignal(base, tf, d, fx) {
   const ema20 = ema(closes, 20), ema50 = ema(closes, 50), ema200 = ema(closes, 200) ?? sma(closes, Math.min(closes.length, 120));
   const r = rsi(closes, 14), mac = macd(closes), boll = bollinger(closes, 20, 2);
   const a = atr(highs, lows, closes, 14), vw = vwap(highs, lows, closes, volumes), mf = mfi(highs, lows, closes, volumes, 14);
+  const adxV = adx(highs, lows, closes, 14), srsi = stochRsi(closes, 14);
   const e20 = emaArray(closes, 20);
   const slope = e20.length > 6 && e20[e20.length - 6] ? (e20[e20.length - 1] - e20[e20.length - 6]) / 5 / price : 0;
   const swingHigh = Math.max(...highs.slice(-20)), swingLow = Math.min(...lows.slice(-20));
@@ -220,13 +249,17 @@ function computeSignal(base, tf, d, fx) {
     if ((long && ema20 > ema50) || (!long && ema20 < ema50)) { conf += 14; reasons.push("Fast EMAs aligned"); }
     if (mac && ((long && mac.hist > 0) || (!long && mac.hist < 0))) { conf += 14; reasons.push("MACD momentum with trend"); }
     if (vw != null && ((long && price > vw) || (!long && price < vw))) { conf += 8; reasons.push("On trend side of VWAP"); }
-    const sep = a ? Math.abs(ema50 - ema200) / a : 0; conf += Math.min(18, sep * 9); if (sep > 1.2) reasons.push("Strong trend");
-    if (r != null) { if (long) { if (r > 85) { conf -= 12; reasons.push("RSI stretched — prefer pullback"); } else if (r > 50) conf += 8; } else if (r < 15) { conf -= 12; reasons.push("RSI stretched — prefer bounce"); } else if (r < 50) conf += 8; }
+    const sep = a ? Math.abs(ema50 - ema200) / a : 0; conf += Math.min(14, sep * 7); if (sep > 1.2) reasons.push("Strong trend");
+    if (r != null) { if (long) { if (r > 85) { conf -= 12; reasons.push("RSI stretched — prefer pullback"); } else if (r > 50) conf += 6; } else if (r < 15) { conf -= 12; reasons.push("RSI stretched — prefer bounce"); } else if (r < 50) conf += 6; }
+    // ADX: only trust a trend when it's actually trending (filters chop).
+    if (adxV != null) { if (adxV >= 25) { conf += 10; reasons.push(`ADX ${adxV.toFixed(0)} (strong trend)`); } else if (adxV < 18) { conf -= 14; reasons.push(`ADX ${adxV.toFixed(0)} (weak/choppy)`); } }
+    // Stochastic RSI: momentum timing for the entry.
+    if (srsi != null) { if (long && srsi < 0.2) { conf += 8; reasons.push("StochRSI oversold (entry timing)"); } else if (!long && srsi > 0.8) { conf += 8; reasons.push("StochRSI overbought (entry timing)"); } }
     conf = Math.max(0, Math.min(100, Math.round(conf)));
   }
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
 
-  const indicators = { price: round(price, 6), rsi14: round(r, 1), macdHist: mac ? round(mac.hist, 6) : null, bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: round(vw, 6), mfi: round(mf, 1), atr: round(a, 6), ema20: round(ema20, 6), ema50: round(ema50, 6), ema200: round(ema200, 6) };
+  const indicators = { price: round(price, 6), rsi14: round(r, 1), macdHist: mac ? round(mac.hist, 6) : null, bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: round(vw, 6), mfi: round(mf, 1), atr: round(a, 6), adx: round(adxV, 1), stochRsi: round(srsi, 2), ema20: round(ema20, 6), ema50: round(ema50, 6), ema200: round(ema200, 6) };
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: round(predicted, 6), lowUsd: round(predicted * (1 - bandFrac), 6), highUsd: round(predicted * (1 + bandFrac), 6) };
 
@@ -251,6 +284,16 @@ function computeSignal(base, tf, d, fx) {
 async function signalFor(base, tf, fx) {
   try { const d = await getOHLCV(base, tf, 210); if (!d) return { base, symbol: base, tf, error: "no data" }; return computeSignal(base, tf, d, fx); }
   catch (e) { return { base, symbol: base, tf, error: e.message }; }
+}
+
+// Timeframes to scan + track. SIGNAL_TF always; any timeframe a user views is
+// added and kept for 30 min so it gets scanned and its signals tracked too.
+const activeTfs = new Map([[SIGNAL_TF, Date.now()]]);
+function touchTf(tf) { if (TF_MINUTES[tf]) activeTfs.set(tf, Date.now()); }
+function currentTfs() {
+  const cutoff = Date.now() - 30 * 60_000;
+  for (const [k, v] of activeTfs) if (k !== SIGNAL_TF && v < cutoff) activeTfs.delete(k);
+  return [...activeTfs.keys()];
 }
 
 const scanCache = {};
@@ -432,6 +475,7 @@ app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNI
 
 app.get("/api/signals", wrap(async (req, res) => {
   const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
+  touchTf(tf); // whatever timeframe you view also gets scanned + tracked
   const data = await scanMarket(tf);
   let signals = data.signals;
   if (req.query.only === "actionable") signals = signals.filter((s) => s.direction !== "NEUTRAL" && !s.error);
@@ -441,6 +485,17 @@ app.get("/api/signals", wrap(async (req, res) => {
 }));
 
 app.get("/api/signal/:symbol", wrap(async (req, res) => { const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF; const fx = await getUsdLkr(); res.json(await signalFor(req.params.symbol.toUpperCase().replace(QUOTE, ""), tf, fx)); }));
+
+// OHLC candles for charting (Lightweight Charts). time in seconds.
+app.get("/api/candles/:symbol", wrap(async (req, res) => {
+  const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
+  const base = req.params.symbol.toUpperCase().replace(QUOTE, "");
+  const limit = Math.min(500, Math.max(50, Number(req.query.limit) || 240));
+  const d = await getOHLCV(base, tf, limit);
+  if (!d || !d.times) { res.status(404).json({ error: "no candles" }); return; }
+  const candles = d.times.map((t, i) => ({ time: Math.floor(t / 1000), open: d.opens[i], high: d.highs[i], low: d.lows[i], close: d.closes[i], volume: d.volumes[i] })).filter((c) => Number.isFinite(c.open) && Number.isFinite(c.close));
+  res.json({ symbol: base, tf, candles });
+}));
 app.post("/api/rescan", wrap(async (req, res) => { const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF; delete scanCache[tf]; res.json(await scanMarket(tf)); }));
 
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
@@ -509,8 +564,10 @@ async function indicatorTick() {
   if (indBusy) return;
   indBusy = true;
   try {
-    const data = await scanMarket(SIGNAL_TF, true); // heavy: klines + indicators
-    await openFrom(data);
+    for (const tf of currentTfs()) { // scan + track every timeframe in use
+      const data = await scanMarket(tf, true);
+      await openFrom(data);
+    }
   } catch (e) { console.warn("[indicators]", e.message); } finally { indBusy = false; }
 }
 function startLoops() {

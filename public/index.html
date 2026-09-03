@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Crypto Signal Engine</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   <script>
     tailwind.config = { theme: { extend: { colors: { ink: "#0b0e14", panel: "#131722", edge: "#1e2532" } } } };
   </script>
@@ -69,6 +70,22 @@
       Data: Binance (USDT spot). Trend-following signals are educational, not financial advice — always use your own stop.
     </p>
   </div>
+
+  <!-- Chart modal -->
+  <div id="chart-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-3">
+    <div class="card w-full max-w-5xl p-4">
+      <div class="mb-2 flex items-center justify-between">
+        <h3 id="chart-title" class="text-lg font-bold text-white"></h3>
+        <div class="flex items-center gap-2">
+          <span id="chart-legend" class="hidden text-xs text-slate-400 sm:inline"></span>
+          <button id="chart-close" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm hover:bg-edge">✕ Close</button>
+        </div>
+      </div>
+      <div id="chart-plan" class="mb-2 flex flex-wrap gap-2 text-xs"></div>
+      <div id="chart" class="w-full" style="height:440px"></div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

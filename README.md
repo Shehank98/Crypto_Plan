@@ -30,7 +30,16 @@ libraries).
 3. **Trade plan:** entry zone around the EMA20/VWAP pullback, stop beyond the recent swing
    (± ATR), TP1/2/3 at 1R/2R/3R, ETA from ATR velocity, and a drift+ATR price forecast.
 
-Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI.
+Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI, **ADX**
+(trend strength — filters choppy markets to lift win rate) and **Stochastic RSI** (entry
+timing).
+
+**Confirm on a chart:** click **📈 Chart** on any signal for a candlestick chart
+(TradingView Lightweight Charts) with EMA 20/50/200 and the signal's **entry zone, stop and
+TP1/2/3 drawn as price lines** — so you can eyeball the setup before taking it.
+
+**Every timeframe you view is tracked:** switching the dashboard to 15m/4h adds it to the
+scan+track set, so its signals are logged and outcome-checked too (not just the default).
 
 ## Data sources (free, keyless) — multi-exchange
 
