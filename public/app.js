@@ -122,7 +122,7 @@ async function load() {
   try {
     const data = await api(`/api/signals?tf=${encodeURIComponent(tf)}`);
     last = data;
-    $("updated").textContent = data.generatedAt ? `updated ${new Date(data.generatedAt).toLocaleTimeString()}` : "";
+    $("updated").innerHTML = data.generatedAt ? `<span class="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400 align-middle"></span>LIVE · every ${Math.max(3, CONFIG.scanIntervalSec || 5)}s · ${new Date(data.generatedAt).toLocaleTimeString()}` : "";
     $("summary").textContent = `${data.actionable} setups · scanned ${data.universe} coins · ${tf}${data.source ? " · " + data.source : ""}`;
     render();
   } catch (e) {
@@ -153,7 +153,8 @@ async function init() {
   $("search").oninput = (e) => { search = e.target.value.trim(); render(); };
   $("btn-refresh").onclick = rescan;
   await load();
-  setInterval(load, 60000);
+  const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live auto-refresh
+  setInterval(load, ms);
 }
 
 function drawSegs() {

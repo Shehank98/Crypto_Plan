@@ -30,7 +30,7 @@ const SIGNAL_TF = process.env.SIGNAL_TF || "1h";
 const TIMEFRAMES = ["5m", "15m", "1h", "4h"];
 const MIN_CONFIDENCE = Number(process.env.SIGNAL_MIN_CONFIDENCE || 45);
 const TRACK_MIN_CONFIDENCE = Number(process.env.TRACK_MIN_CONFIDENCE || 55);
-const SCAN_INTERVAL_MIN = Number(process.env.SCAN_INTERVAL_MIN || 5);
+const SCAN_INTERVAL_SEC = Math.max(3, Number(process.env.SCAN_INTERVAL_SEC || 5));
 const FALLBACK_USD_LKR = Number(process.env.FALLBACK_USD_LKR || 300);
 const MAX_WAIT_CANDLES = Number(process.env.MAX_WAIT_CANDLES || 12); // wait for entry fill
 const MAX_HOLD_CANDLES = Number(process.env.MAX_HOLD_CANDLES || 60); // max time in trade
@@ -224,9 +224,10 @@ async function signalFor(base, tf, fx) {
 
 const scanCache = {};
 let scanning = false;
-async function scanMarket(tf) {
+async function scanMarket(tf, force) {
   const cached = scanCache[tf];
-  if (cached && Date.now() - cached.at < 60_000) return cached.data;
+  const ttl = SCAN_INTERVAL_SEC * 1000 * 0.8;
+  if (!force && cached && Date.now() - cached.at < ttl) return cached.data;
   if (scanning && cached) return cached.data;
   scanning = true;
   try {
@@ -337,11 +338,10 @@ async function monitor() {
   }
 }
 
-async function trackScan() {
-  const data = await scanMarket(SIGNAL_TF);
+async function openFrom(data) {
   for (const s of data.signals) {
-    if (s.direction === "LONG" || s.direction === "SHORT") {
-      if (s.confidence >= TRACK_MIN_CONFIDENCE && s.entry && s.targets) await store.open(s).catch((e) => console.warn("[track]", e.message));
+    if ((s.direction === "LONG" || s.direction === "SHORT") && s.confidence >= TRACK_MIN_CONFIDENCE && s.entry && s.targets) {
+      await store.open(s).catch((e) => console.warn("[track]", e.message));
     }
   }
 }
@@ -384,7 +384,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => { console.error("[api]", e.message); res.status(e.statusCode || 500).json({ error: e.message }); });
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok", source: ACTIVE?.name || null }));
-app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb }));
+app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, scanIntervalSec: SCAN_INTERVAL_SEC }));
 
 app.get("/api/signals", wrap(async (req, res) => {
   const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
@@ -450,18 +450,33 @@ const alerted = new Map();
 // ===========================================================================
 // Boot
 // ===========================================================================
-function startCron() {
-  const m = Math.max(2, SCAN_INTERVAL_MIN);
-  cron.schedule(`*/${m} * * * *`, () => trackScan().catch((e) => console.warn("[cron scan]", e.message)));
-  cron.schedule("* * * * *", () => monitor().catch((e) => console.warn("[cron monitor]", e.message)));
+let loopBusy = false;
+function startLoops() {
+  // Live scan loop: rescan the whole market + open new signals + monitor open
+  // trades, every SCAN_INTERVAL_SEC. An overlap guard skips a tick if the
+  // previous one is still running (so a slow scan never stacks up).
+  setInterval(async () => {
+    if (loopBusy) return;
+    loopBusy = true;
+    try {
+      const data = await scanMarket(SIGNAL_TF, true);
+      await openFrom(data);
+      await monitor();
+    } catch (e) {
+      console.warn("[loop]", e.message);
+    } finally {
+      loopBusy = false;
+    }
+  }, SCAN_INTERVAL_SEC * 1000);
   cron.schedule("*/15 * * * *", () => signalAlerts().catch((e) => console.warn("[cron alert]", e.message)));
+  console.log(`[loop] live scan every ${SCAN_INTERVAL_SEC}s`);
 }
 async function boot() {
   try { await initStore(); } catch (e) { console.error("[store] init failed:", e.message); }
   app.listen(PORT, () => console.log(`[server] signals on ${PORT}`));
   startTelegram();
-  startCron();
-  detectSource().then(() => trackScan()).catch((e) => console.warn("[boot]", e.message));
+  startLoops();
+  detectSource().then(() => scanMarket(SIGNAL_TF, true)).then((d) => openFrom(d)).catch((e) => console.warn("[boot]", e.message));
 }
 if (require.main === module) boot();
 

@@ -67,7 +67,7 @@ dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
 | `QUOTE` | `USDT` | Quote asset for pairs |
 | `SIGNAL_TF` | `1h` | Default timeframe: `5m`/`15m`/`1h`/`4h` |
 | `SIGNAL_MIN_CONFIDENCE` | `45` | Min % to emit LONG/SHORT (lower = more signals) |
-| `SCAN_INTERVAL_MIN` | `5` | Background rescan cadence |
+| `SCAN_INTERVAL_SEC` | `5` | Live auto-scan cadence in **seconds** (min 3). The whole market + open-trade monitor refresh on this tick; the UI polls at the same rate. Raise it if you hit exchange rate limits. |
 | `FALLBACK_USD_LKR` | `300` | FX fallback for LKR display |
 | `TELEGRAM_BOT_TOKEN` | – | Enables the Telegram bot (`/signals`, `/signal <SYM>`) |
 | `TELEGRAM_CHAT_ID` | – | Optional alert target; chats that message the bot auto-register |
