@@ -29,33 +29,44 @@
       </div>
     </header>
 
-    <!-- Controls -->
-    <div class="mb-4 flex flex-wrap items-center gap-3">
-      <div id="tf-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
-      <div id="filter-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
-      <input id="search" placeholder="Filter coin… e.g. BTC" class="w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
-      <span id="summary" class="ml-auto text-xs text-slate-400"></span>
+    <!-- Tabs -->
+    <div id="tabs" class="mb-4 flex gap-1 border-b border-edge text-sm"></div>
+
+    <!-- SIGNALS TAB -->
+    <div id="tab-signals">
+      <div class="mb-4 flex flex-wrap items-center gap-3">
+        <div id="tf-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
+        <div id="filter-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
+        <input id="search" placeholder="Filter coin… e.g. BTC" class="w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
+        <span id="summary" class="ml-auto text-xs text-slate-400"></span>
+      </div>
+      <div id="signals" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"></div>
+      <p id="empty" class="hidden py-16 text-center text-slate-500"></p>
     </div>
 
-    <!-- Track record -->
-    <div id="stats" class="mb-4 flex flex-wrap gap-2"></div>
-
-    <div id="signals" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"></div>
-    <p id="empty" class="hidden py-16 text-center text-slate-500"></p>
-
-    <!-- Tracked signals (live + results) -->
-    <section class="mt-8">
-      <div class="mb-2 flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">🎯 Track record <span id="track-note" class="text-xs font-normal text-slate-500"></span></h2>
+    <!-- TRACK RECORD TAB -->
+    <div id="tab-track" class="hidden">
+      <div id="stats" class="mb-4 flex flex-wrap gap-2"></div>
+      <p class="mb-4 text-xs text-slate-500">
+        Every high-confidence signal is logged and checked live until it reaches a target or stop.
+        <span id="track-note"></span>
+      </p>
+      <div class="mb-4 card p-4">
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">Win rate by timeframe</h3>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="bytf-table"></table></div>
       </div>
-      <div class="grid gap-4 lg:grid-cols-2">
-        <div class="card p-4"><h3 class="mb-2 text-sm font-semibold text-slate-300">Live / open</h3><div class="overflow-x-auto"><table class="w-full text-sm" id="open-table"></table></div></div>
-        <div class="card p-4"><h3 class="mb-2 text-sm font-semibold text-slate-300">Recent results</h3><div class="overflow-x-auto"><table class="w-full text-sm" id="recent-table"></table></div></div>
+      <div class="mb-4 card p-4">
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">Live / open trades</h3>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="open-table"></table></div>
       </div>
-    </section>
+      <div class="card p-4">
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">Recent results</h3>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="recent-table"></table></div>
+      </div>
+    </div>
 
     <p class="mt-8 text-center text-xs text-slate-500">
-      Free data: Binance · Coinbase · ExchangeRate. Trend-following signals are educational, not financial advice — always use your own stop.
+      Data: Binance (USDT spot). Trend-following signals are educational, not financial advice — always use your own stop.
     </p>
   </div>
   <script src="/app.js"></script>

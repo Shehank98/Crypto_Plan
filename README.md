@@ -34,11 +34,16 @@ Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI.
 
 ## Data sources (free, keyless) — multi-exchange
 
-A minimal ccxt-style layer auto-detects the first reachable exchange and scans the whole
-market from it: **Binance → Bybit → OKX** (order set by `EXCHANGES`), with **Coinbase** as a
-per-coin fallback. This means whole-market scanning still works where Binance is
-geo-blocked. USD→LKR from open.er-api.com (display only). The active source is shown in the
-header and `/api/config`.
+**Binance-only** by default (you trade on Binance): the universe is Binance's TRADING spot
+`USDT` pairs (from `exchangeInfo`). To survive geo-blocks it tries several Binance public
+hosts — **`data-api.binance.vision`** (the market-data mirror) first, then
+`api.binance.com`, etc. Set `EXCHANGES=binance,bybit,okx` to allow Bybit/OKX as a fallback
+(still filtered to Binance-listed coins when the Binance list is reachable).
+
+**Live model (efficient):** a **5s** tick pulls all prices in **one request** and checks
+open trades for TP/SL hits; the **heavy indicator rescan** runs every
+`INDICATOR_REFRESH_SEC` (default 60s). So prices/outcomes feel live without hammering the
+exchange. USD→LKR from open.er-api.com (display only).
 
 ## Signal outcome tracking (trust)
 

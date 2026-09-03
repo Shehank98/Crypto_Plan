@@ -87,26 +87,42 @@ function renderStats(s) {
   $("track-note").textContent = s.durable ? "" : "· in-memory (set DATABASE_URL to persist across restarts)";
 }
 
+function renderByTf(byTf) {
+  const rows = Object.entries(byTf || {});
+  $("bytf-table").innerHTML = rows.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Timeframe</th><th class="text-right">Decided</th><th class="text-right">Win rate</th></tr></thead><tbody>${rows
+        .map(([k, v]) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-medium">${k}</td><td class="py-1.5 text-right">${v.n}</td><td class="py-1.5 text-right ${v.winRatePct >= 50 ? "text-emerald-400" : "text-rose-400"}">${v.winRatePct}%</td></tr>`)
+        .join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No decided trades yet.</td></tr></tbody>';
+}
+
+const tfPill = (t) => `<span class="pill bg-slate-800 text-slate-400">${t}</span>`;
+
 function renderTracked(t) {
   const openRows = (t.open || []).map((x) => `<tr class="border-b border-edge/60">
       <td class="py-1.5 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
+      <td class="py-1.5">${tfPill(x.tf)}</td>
       <td class="py-1.5"><span class="pill ${x.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
       <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}${x.tp1_hit ? " · TP1" : ""}${x.tp2_hit ? "·TP2" : ""}</td>
+      <td class="py-1.5 text-right tabular-nums text-slate-400">${usd(x.entry_mid)}</td>
+      <td class="py-1.5 text-right tabular-nums text-rose-300">${usd(x.stop)}</td>
       <td class="py-1.5 text-right tabular-nums">${x.currentPrice != null ? usd(x.currentPrice) : "—"}</td>
       <td class="py-1.5 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? x.openR + "R" : "—"}</td>
     </tr>`).join("");
   $("open-table").innerHTML = (t.open || []).length
-    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Dir</th><th>Status</th><th class="text-right">Price</th><th class="text-right">Open R</th></tr></thead><tbody>${openRows}</tbody>`
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Status</th><th class="text-right">Entry</th><th class="text-right">Stop</th><th class="text-right">Price</th><th class="text-right">Open R</th></tr></thead><tbody>${openRows}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No open tracked signals yet. High-confidence setups are logged automatically.</td></tr></tbody>';
 
   const recRows = (t.recent || []).map((x) => `<tr class="border-b border-edge/60">
       <td class="py-1.5 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
-      <td class="py-1.5">${x.direction} <span class="text-slate-600">${x.tf}</span></td>
-      <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}</td>
+      <td class="py-1.5">${tfPill(x.tf)}</td>
+      <td class="py-1.5"><span class="pill ${x.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
+      <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}${x.tp3_hit ? " · TP3" : x.tp2_hit ? " · TP2" : x.tp1_hit ? " · TP1" : ""}</td>
       <td class="py-1.5 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? x.result_r + "R" : "—"}</td>
+      <td class="py-1.5 text-right text-xs text-slate-500">${x.closed_at ? new Date(x.closed_at).toLocaleString() : ""}</td>
     </tr>`).join("");
   $("recent-table").innerHTML = (t.recent || []).length
-    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Dir</th><th>Result</th><th class="text-right">R</th></tr></thead><tbody>${recRows}</tbody>`
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Result</th><th class="text-right">R</th><th class="text-right">Closed</th></tr></thead><tbody>${recRows}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No closed results yet — check back as signals resolve.</td></tr></tbody>';
 }
 
@@ -114,6 +130,7 @@ async function loadTrack() {
   try {
     const [s, t] = await Promise.all([api("/api/stats"), api("/api/tracked")]);
     renderStats(s);
+    renderByTf(s.byTimeframe);
     renderTracked(t);
   } catch (e) { /* ignore */ }
 }
@@ -129,7 +146,7 @@ async function load() {
     $("empty").classList.remove("hidden");
     $("empty").textContent = e.message;
   }
-  loadTrack();
+  if (activeTab === "track") loadTrack();
 }
 
 async function rescan() {
@@ -145,9 +162,23 @@ async function rescan() {
   }
 }
 
+let activeTab = "signals";
+function drawTabs() {
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }];
+  $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
+  $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
+    activeTab = b.dataset.tab;
+    $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
+    $("tab-track").classList.toggle("hidden", activeTab !== "track");
+    drawTabs();
+    if (activeTab === "track") loadTrack();
+  }));
+}
+
 async function init() {
   try { CONFIG = await api("/api/config"); } catch (e) { /* defaults */ }
   tf = CONFIG.tf || "1h";
+  drawTabs();
   seg($("tf-buttons"), (CONFIG.timeframes || ["5m", "15m", "1h", "4h"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
   seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
   $("search").oninput = (e) => { search = e.target.value.trim(); render(); };

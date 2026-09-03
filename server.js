@@ -30,11 +30,15 @@ const SIGNAL_TF = process.env.SIGNAL_TF || "1h";
 const TIMEFRAMES = ["5m", "15m", "1h", "4h"];
 const MIN_CONFIDENCE = Number(process.env.SIGNAL_MIN_CONFIDENCE || 45);
 const TRACK_MIN_CONFIDENCE = Number(process.env.TRACK_MIN_CONFIDENCE || 55);
-const SCAN_INTERVAL_SEC = Math.max(3, Number(process.env.SCAN_INTERVAL_SEC || 5));
+const SCAN_INTERVAL_SEC = Math.max(3, Number(process.env.SCAN_INTERVAL_SEC || 5)); // live price/monitor tick
+const INDICATOR_REFRESH_SEC = Math.max(15, Number(process.env.INDICATOR_REFRESH_SEC || 60)); // heavy indicator rescan
 const FALLBACK_USD_LKR = Number(process.env.FALLBACK_USD_LKR || 300);
 const MAX_WAIT_CANDLES = Number(process.env.MAX_WAIT_CANDLES || 12); // wait for entry fill
 const MAX_HOLD_CANDLES = Number(process.env.MAX_HOLD_CANDLES || 60); // max time in trade
-const EXCHANGE_ORDER = (process.env.EXCHANGES || "binance,bybit,okx").split(",").map((s) => s.trim().toLowerCase());
+const EXCHANGE_ORDER = (process.env.EXCHANGES || "binance").split(",").map((s) => s.trim().toLowerCase());
+// Binance public hosts tried in order — data-api.binance.vision is the market-data
+// mirror that usually works even where api.binance.com is geo-blocked.
+const BINANCE_HOSTS = (process.env.BINANCE_HOSTS || "https://data-api.binance.vision,https://api.binance.com,https://api-gcp.binance.com,https://api1.binance.com").split(",").map((h) => h.trim());
 
 const TF_MINUTES = { "5m": 5, "15m": 15, "1h": 60, "4h": 240 };
 const EXCLUDE_BASES = new Set(["USDC", "FDUSD", "TUSD", "BUSD", "DAI", "USDP", "EUR", "GBP", "USDT", "USD", "WBTC", "WETH"]);
@@ -70,15 +74,38 @@ async function getUsdLkr() {
 // ===========================================================================
 // Exchange adapters (minimal, ccxt-style). Each returns normalized data.
 // ===========================================================================
+// Binance GET with host failover; remembers the working host.
+let binanceHost = null;
+async function binanceGet(pathname, params) {
+  const hosts = binanceHost ? [binanceHost, ...BINANCE_HOSTS.filter((h) => h !== binanceHost)] : BINANCE_HOSTS;
+  let err;
+  for (const h of hosts) {
+    try { const r = await http.get(h + pathname, { params }); binanceHost = h; return r.data; }
+    catch (e) { err = e; }
+  }
+  throw err || new Error("all Binance hosts failed");
+}
+// Set of Binance-listed, TRADING, spot USDT base assets — the tradable universe.
+let binanceBases = { at: 0, set: null };
+async function getBinanceBases() {
+  if (Date.now() - binanceBases.at < 6 * 3600_000 && binanceBases.set) return binanceBases.set;
+  try {
+    const info = await binanceGet("/api/v3/exchangeInfo");
+    const set = new Set((info.symbols || []).filter((s) => s.quoteAsset === QUOTE && s.status === "TRADING" && s.isSpotTradingAllowed).map((s) => s.baseAsset));
+    if (set.size) binanceBases = { at: Date.now(), set };
+  } catch (e) { console.warn("[binance] exchangeInfo:", e.message); }
+  return binanceBases.set;
+}
+
 const adapters = {
   binance: {
     name: "binance",
     async tickers() {
-      const { data } = await http.get("https://api.binance.com/api/v3/ticker/24hr");
+      const data = await binanceGet("/api/v3/ticker/24hr");
       return data.filter((t) => t.symbol.endsWith(QUOTE)).map((t) => ({ base: t.symbol.slice(0, -QUOTE.length), quoteVolume: +t.quoteVolume, last: +t.lastPrice, changePct: +t.priceChangePercent }));
     },
     async klines(base, tf, limit) {
-      const { data } = await http.get("https://api.binance.com/api/v3/klines", { params: { symbol: base + QUOTE, interval: tf, limit } });
+      const data = await binanceGet("/api/v3/klines", { symbol: base + QUOTE, interval: tf, limit });
       return { highs: data.map((k) => +k[2]), lows: data.map((k) => +k[3]), closes: data.map((k) => +k[4]), volumes: data.map((k) => +k[5]) };
     },
   },
@@ -139,13 +166,17 @@ async function coinbaseKlines(base, tf) {
 
 let tickersCache = { at: 0, list: [] };
 async function fetchTickers() {
-  if (Date.now() - tickersCache.at < 45_000 && tickersCache.list.length) return tickersCache.list;
+  // Short cache = live prices every ~5s (one request for the whole market).
+  if (Date.now() - tickersCache.at < SCAN_INTERVAL_SEC * 1000 && tickersCache.list.length) return tickersCache.list;
   const src = await detectSource();
   if (!src) return tickersCache.list;
   try {
-    const list = (await src.tickers())
+    let list = (await src.tickers())
       .filter((t) => t.base && !EXCLUDE_BASES.has(t.base) && !LEVERAGED.test(t.base) && Number.isFinite(t.quoteVolume))
       .sort((a, b) => b.quoteVolume - a.quoteVolume);
+    // Restrict to coins actually listed & trading on Binance (you trade on Binance).
+    const bset = await getBinanceBases().catch(() => null);
+    if (bset && bset.size) list = list.filter((t) => bset.has(t.base));
     if (list.length) tickersCache = { at: Date.now(), list };
   } catch (e) { console.warn("[tickers]", e.message); ACTIVE = null; }
   return tickersCache.list;
@@ -226,7 +257,7 @@ const scanCache = {};
 let scanning = false;
 async function scanMarket(tf, force) {
   const cached = scanCache[tf];
-  const ttl = SCAN_INTERVAL_SEC * 1000 * 0.8;
+  const ttl = INDICATOR_REFRESH_SEC * 1000; // indicators are recomputed on this cadence
   if (!force && cached && Date.now() - cached.at < ttl) return cached.data;
   if (scanning && cached) return cached.data;
   scanning = true;
@@ -325,10 +356,23 @@ function advance(t, P, now) {
   return null;
 }
 
-async function monitor() {
+// Patch live prices onto the cached scan so the UI shows moving prices every
+// tick without recomputing indicators.
+function updateLivePrices(prices) {
+  for (const tf of Object.keys(scanCache)) {
+    const data = scanCache[tf]?.data;
+    if (!data) continue;
+    for (const s of data.signals) {
+      const p = prices.get(s.base);
+      if (p != null) { s.priceUsd = round(p, 6); s.priceLkr = round(p * (data.fx || 1), 2); }
+    }
+  }
+}
+
+async function monitor(prices) {
   const open = await store.open_rows();
   if (!open.length) return;
-  const prices = await getTickerMap();
+  if (!prices) prices = await getTickerMap();
   const now = Date.now();
   for (const t of open) {
     const P = prices.get(t.symbol);
@@ -384,7 +428,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => { console.error("[api]", e.message); res.status(e.statusCode || 500).json({ error: e.message }); });
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok", source: ACTIVE?.name || null }));
-app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, scanIntervalSec: SCAN_INTERVAL_SEC }));
+app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, scanIntervalSec: SCAN_INTERVAL_SEC, indicatorRefreshSec: INDICATOR_REFRESH_SEC }));
 
 app.get("/api/signals", wrap(async (req, res) => {
   const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
@@ -450,33 +494,37 @@ const alerted = new Map();
 // ===========================================================================
 // Boot
 // ===========================================================================
-let loopBusy = false;
+let liveBusy = false;
+let indBusy = false;
+async function liveTick() {
+  if (liveBusy) return;
+  liveBusy = true;
+  try {
+    const prices = await getTickerMap(); // one request for the whole market
+    updateLivePrices(prices);
+    await monitor(prices); // catch TP/SL hits near-instantly
+  } catch (e) { console.warn("[live]", e.message); } finally { liveBusy = false; }
+}
+async function indicatorTick() {
+  if (indBusy) return;
+  indBusy = true;
+  try {
+    const data = await scanMarket(SIGNAL_TF, true); // heavy: klines + indicators
+    await openFrom(data);
+  } catch (e) { console.warn("[indicators]", e.message); } finally { indBusy = false; }
+}
 function startLoops() {
-  // Live scan loop: rescan the whole market + open new signals + monitor open
-  // trades, every SCAN_INTERVAL_SEC. An overlap guard skips a tick if the
-  // previous one is still running (so a slow scan never stacks up).
-  setInterval(async () => {
-    if (loopBusy) return;
-    loopBusy = true;
-    try {
-      const data = await scanMarket(SIGNAL_TF, true);
-      await openFrom(data);
-      await monitor();
-    } catch (e) {
-      console.warn("[loop]", e.message);
-    } finally {
-      loopBusy = false;
-    }
-  }, SCAN_INTERVAL_SEC * 1000);
+  setInterval(liveTick, SCAN_INTERVAL_SEC * 1000);            // prices + hits every ~5s (1 request)
+  setInterval(indicatorTick, INDICATOR_REFRESH_SEC * 1000);   // full indicator rescan periodically
   cron.schedule("*/15 * * * *", () => signalAlerts().catch((e) => console.warn("[cron alert]", e.message)));
-  console.log(`[loop] live scan every ${SCAN_INTERVAL_SEC}s`);
+  console.log(`[loop] live prices/monitor every ${SCAN_INTERVAL_SEC}s · indicators every ${INDICATOR_REFRESH_SEC}s`);
 }
 async function boot() {
   try { await initStore(); } catch (e) { console.error("[store] init failed:", e.message); }
   app.listen(PORT, () => console.log(`[server] signals on ${PORT}`));
   startTelegram();
   startLoops();
-  detectSource().then(() => scanMarket(SIGNAL_TF, true)).then((d) => openFrom(d)).catch((e) => console.warn("[boot]", e.message));
+  detectSource().then(() => indicatorTick()).catch((e) => console.warn("[boot]", e.message));
 }
 if (require.main === module) boot();
 
