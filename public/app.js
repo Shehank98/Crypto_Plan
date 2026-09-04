@@ -1,4 +1,4 @@
-// Crypto Signal Engine — signals-only client.
+// Crypto Signal Engine - signals-only client.
 const COLORS = { BTC: "#f7931a", ETH: "#8b9dff", SOL: "#14f195", BNB: "#f3ba2f" };
 const DIR = {
   LONG: { cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40", bar: "#10b981" },
@@ -15,7 +15,7 @@ const btCache = {}; // per-card backtest results, keyed by SYMBOL|tf, so the 5s 
 const $ = (id) => document.getElementById(id);
 const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
 // Precision-aware price display: sub-cent coins (PEPE, SHIB…) need more decimals.
-const usd = (n) => { if (!Number.isFinite(n)) return "—"; const a = Math.abs(n); const d = a >= 100 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 6 : a >= 0.0001 ? 8 : 10; return "$" + n.toLocaleString("en-US", { maximumFractionDigits: d }); };
+const usd = (n) => { if (!Number.isFinite(n)) return "-"; const a = Math.abs(n); const d = a >= 100 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 6 : a >= 0.0001 ? 8 : 10; return "$" + n.toLocaleString("en-US", { maximumFractionDigits: d }); };
 const coinColor = (s) => COLORS[s] || "#818cf8";
 
 async function api(p) {
@@ -59,14 +59,14 @@ function card(s) {
   const btRow = bt
     ? (bt.error
         ? `<p class="mt-2 text-[11px] text-slate-500">Backtest: ${bt.error}</p>`
-        : `<p class="mt-2 rounded border border-edge bg-ink/50 px-2 py-1 text-[11px] text-slate-400">Backtest (${bt.bars} bars): Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "—"}%</b> · ${bt.trades} trades · TP1 ${bt.tp1RatePct ?? "—"}% · TP2 ${bt.tp2RatePct ?? "—"}% · Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "—"}R</b></p>`)
+        : `<p class="mt-2 rounded border border-edge bg-ink/50 px-2 py-1 text-[11px] text-slate-400">Backtest (${bt.bars} bars): Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "-"}%</b> · ${bt.trades} trades · TP1 ${bt.tp1RatePct ?? "-"}% · TP2 ${bt.tp2RatePct ?? "-"}% · Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "-"}R</b></p>`)
     : "";
   const head = `<div class="flex items-center justify-between">
       <span class="text-base font-bold" style="color:${coinColor(s.symbol)}">${s.symbol}<span class="ml-1 text-xs font-normal text-slate-500">${s.tf}${s.changePct != null ? ` · ${s.changePct > 0 ? "+" : ""}${s.changePct}%/24h` : ""}</span></span>
       <span class="pill border ${d.cls}">${s.direction} ${s.confidence}%</span>
     </div>
     <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence}%;background:${d.bar}" class="h-full"></div></div>
-    <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · ADX ${ind.adx ?? "—"} · StochRSI ${ind.stochRsi ?? "—"} · MFI ${ind.mfi ?? "—"}</p>`;
+    <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "-"} · ADX ${ind.adx ?? "-"} · StochRSI ${ind.stochRsi ?? "-"} · MFI ${ind.mfi ?? "-"}</p>`;
 
   if (s.direction === "NEUTRAL" || !s.entry) {
     return `<div class="card p-4 cursor-pointer hover:border-indigo-500/40" data-analyze="${s.symbol}" data-tf="${s.tf}" title="Click for full analysis">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div><div class="flex gap-1">${btBtn}${chartBtn}</div></div>${btRow}</div>`;
@@ -106,7 +106,7 @@ function render() {
   const empty = $("empty");
   if (!list.length) {
     empty.classList.remove("hidden");
-    empty.textContent = search ? `No coin matches "${search}".` : "No actionable setups right now — the market may be ranging. Try another timeframe or the All filter.";
+    empty.textContent = search ? `No coin matches "${search}".` : "No actionable setups right now - the market may be ranging. Try another timeframe or the All filter.";
   } else empty.classList.add("hidden");
 }
 
@@ -116,12 +116,12 @@ function renderStats(s) {
   const chip = (label, val, cls) => `<span class="pill border border-edge bg-panel px-3 py-1.5 text-slate-300">${label} <b class="${cls || "text-white"}">${val}</b></span>`;
   const wr = s.winRatePct;
   $("stats").innerHTML = [
-    chip("Win rate", wr == null ? "—" : wr + "%", wr == null ? "" : wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-sky-400" : "text-rose-400"),
+    chip("Win rate", wr == null ? "-" : wr + "%", wr == null ? "" : wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-sky-400" : "text-rose-400"),
     chip("Decided", s.decided),
-    chip("TP1", (s.tp1RatePct ?? "—") + "%"),
-    chip("TP2", (s.tp2RatePct ?? "—") + "%"),
-    chip("TP3", (s.tp3RatePct ?? "—") + "%"),
-    chip("Avg R", s.avgResultR ?? "—", s.avgResultR > 0 ? "text-emerald-400" : s.avgResultR < 0 ? "text-rose-400" : ""),
+    chip("TP1", (s.tp1RatePct ?? "-") + "%"),
+    chip("TP2", (s.tp2RatePct ?? "-") + "%"),
+    chip("TP3", (s.tp3RatePct ?? "-") + "%"),
+    chip("Avg R", s.avgResultR ?? "-", s.avgResultR > 0 ? "text-emerald-400" : s.avgResultR < 0 ? "text-rose-400" : ""),
     chip("Open", s.open),
   ].join(" ");
   $("track-note").textContent = s.durable ? "" : "· in-memory (set DATABASE_URL to persist across restarts)";
@@ -136,11 +136,11 @@ function renderEta(s) {
   const acc = e.accuracyPct;
   const accCls = acc >= 75 ? "text-emerald-400" : acc >= 50 ? "text-amber-400" : "text-rose-400";
   el.innerHTML = `
-    <h3 class="mb-1 text-sm font-semibold text-slate-300">⏱ ETA accuracy — do the time estimates hold up?</h3>
+    <h3 class="mb-1 text-sm font-semibold text-slate-300">⏱ ETA accuracy - do the time estimates hold up?</h3>
     <p class="text-slate-400">Across <b class="text-slate-200">${e.n}</b> trade${e.n === 1 ? "" : "s"} that reached TP1: the engine estimated
       <b class="text-slate-200">${e.estLabel}</b>, and it actually took <b class="text-slate-200">${e.actualLabel}</b>.
       Timing accuracy <b class="${accCls}">${acc}%</b> · hit on/ahead of estimate <b class="text-slate-200">${e.onTimePct}%</b> of the time.</p>
-    <p class="mt-1 text-slate-500">ETAs are projected from ATR speed — treat them as a ballpark, not a countdown.</p>`;
+    <p class="mt-1 text-slate-500">ETAs are projected from ATR speed - treat them as a ballpark, not a countdown.</p>`;
 }
 
 function renderByTf(byTf) {
@@ -169,12 +169,12 @@ function tp1Progress(x) {
 // --- Sri Lanka time (Asia/Colombo, UTC+5:30) + durations ---
 const SL_TZ = "Asia/Colombo";
 function slTime(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try { return new Date(iso).toLocaleString("en-GB", { timeZone: SL_TZ, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true }); }
-  catch (e) { return "—"; }
+  catch (e) { return "-"; }
 }
 function fmtDur(min) {
-  if (!Number.isFinite(min) || min < 0) return "—";
+  if (!Number.isFinite(min) || min < 0) return "-";
   if (min < 60) return `${Math.round(min)}m`;
   if (min < 1440) return `${(min / 60).toFixed(1)}h`;
   return `${(min / 1440).toFixed(1)}d`;
@@ -182,7 +182,7 @@ function fmtDur(min) {
 // Minutes between two ISO timestamps.
 function minsBetween(a, b) { if (!a || !b) return null; const m = (new Date(b).getTime() - new Date(a).getTime()) / 60000; return Number.isFinite(m) ? m : null; }
 // Projected clock time (SL) that TP1 is estimated to hit: entered + eta minutes.
-function etaClock(enteredIso, etaMin) { if (!enteredIso || !Number.isFinite(etaMin)) return "—"; return slTime(new Date(new Date(enteredIso).getTime() + etaMin * 60000)); }
+function etaClock(enteredIso, etaMin) { if (!enteredIso || !Number.isFinite(etaMin)) return "-"; return slTime(new Date(new Date(enteredIso).getTime() + etaMin * 60000)); }
 
 function renderTrackedFiltered() {
   const open = trackFilter(lastTrack.open);
@@ -209,8 +209,8 @@ function renderTrackedFiltered() {
       <td class="py-2 text-right tabular-nums text-slate-200">${usd(x.entry_mid)}</td>
       <td class="py-2 text-xs text-slate-400 whitespace-nowrap">${x.entered_at ? slTime(x.entered_at) : slTime(x.created_at) + " <span class='text-slate-600'>(logged)</span>"}</td>
       <td class="py-2 text-xs whitespace-nowrap">${etaCell}</td>
-      <td class="py-2 text-right tabular-nums ${gain > 0 ? "text-emerald-400" : gain < 0 ? "text-rose-400" : "text-slate-400"}">${gain != null ? (gain > 0 ? "+" : "") + gain + "%" : "—"}</td>
-      <td class="py-2 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "—"}</td>
+      <td class="py-2 text-right tabular-nums ${gain > 0 ? "text-emerald-400" : gain < 0 ? "text-rose-400" : "text-slate-400"}">${gain != null ? (gain > 0 ? "+" : "") + gain + "%" : "-"}</td>
+      <td class="py-2 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "-"}</td>
       <td class="py-2" style="min-width:120px">
         <div class="flex items-center gap-2">
           <div class="h-1.5 flex-1 overflow-hidden rounded bg-slate-800"><div class="h-full bg-emerald-500" style="width:${prog}%"></div></div>
@@ -238,7 +238,7 @@ function renderTrackedFiltered() {
     } else if (actualMin != null) {
       evaCell = `<span class="text-slate-300">act ${fmtDur(actualMin)}</span>`;
     } else {
-      evaCell = `<span class="text-slate-600">— no TP1</span>`;
+      evaCell = `<span class="text-slate-600">- no TP1</span>`;
     }
     return `<tr class="cursor-pointer border-b border-edge/60 hover:bg-edge/30" data-trade="recent:${i}" title="Click for the full trade plan & timing">
       <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
@@ -248,8 +248,8 @@ function renderTrackedFiltered() {
       <td class="py-2 text-xs text-slate-400 whitespace-nowrap">${slTime(x.entered_at || x.created_at)}</td>
       <td class="py-2 ${STATUS_CLS[x.status]}">${x.status}${x.tp3_hit ? " ·TP3" : x.tp2_hit ? " ·TP2" : x.tp1_hit ? " ·TP1" : ""}</td>
       <td class="py-2 text-xs whitespace-nowrap">${evaCell}</td>
-      <td class="py-2 text-right tabular-nums ${gainPct > 0 ? "text-emerald-400" : gainPct < 0 ? "text-rose-400" : "text-slate-400"}">${gainPct != null ? (gainPct > 0 ? "+" : "") + gainPct + "%" : "—"}</td>
-      <td class="py-2 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? (x.result_r > 0 ? "+" : "") + x.result_r + "R" : "—"}</td>
+      <td class="py-2 text-right tabular-nums ${gainPct > 0 ? "text-emerald-400" : gainPct < 0 ? "text-rose-400" : "text-slate-400"}">${gainPct != null ? (gainPct > 0 ? "+" : "") + gainPct + "%" : "-"}</td>
+      <td class="py-2 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? (x.result_r > 0 ? "+" : "") + x.result_r + "R" : "-"}</td>
       <td class="py-2 text-right text-xs text-slate-500 whitespace-nowrap">${slTime(x.closed_at)}</td>
     </tr>`;
   }).join("");
@@ -269,7 +269,7 @@ function renderTrackedFiltered() {
 function openTradeAnalysis(x) {
   const m = $("trade-modal"); m.classList.remove("hidden"); m.classList.add("flex");
   const long = x.direction === "LONG";
-  $("trade-title").innerHTML = `<span style="color:${coinColor(x.symbol)}">${x.symbol}</span> · ${x.tf} · ${DIRPILL(x.direction)} — trade plan`;
+  $("trade-title").innerHTML = `<span style="color:${coinColor(x.symbol)}">${x.symbol}</span> · ${x.tf} · ${DIRPILL(x.direction)} - trade plan`;
   const riskPct = x.entry_mid && x.stop ? round(Math.abs(x.entry_mid - x.stop) / x.entry_mid * 100, 2) : null;
   const startedAt = x.entered_at || x.created_at;
   const live = x.status === "ACTIVE" || x.status === "WAITING";
@@ -317,19 +317,19 @@ function openTradeAnalysis(x) {
   const rightNow = live
     ? `<div class="mb-3 grid grid-cols-2 gap-3 rounded-lg border border-edge bg-ink/50 p-3 sm:grid-cols-5">
         ${box("Now", usd(x.currentPrice))}
-        ${box("Gain", curGain != null ? (curGain > 0 ? "+" : "") + curGain + "%" : "—", curGain > 0 ? "text-emerald-400" : curGain < 0 ? "text-rose-400" : "")}
-        ${box("Open R", x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "—", x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "")}
-        ${box("In trade", nowMin != null ? fmtDur(nowMin) : "—")}
-        ${box(nextK ? `Est. to TP${nextK}` : "Status", nextK ? (nextLeft != null ? "~" + fmtDur(nextLeft) : "—") : x.status, "text-sky-300")}
+        ${box("Gain", curGain != null ? (curGain > 0 ? "+" : "") + curGain + "%" : "-", curGain > 0 ? "text-emerald-400" : curGain < 0 ? "text-rose-400" : "")}
+        ${box("Open R", x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "-", x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "")}
+        ${box("In trade", nowMin != null ? fmtDur(nowMin) : "-")}
+        ${box(nextK ? `Est. to TP${nextK}` : "Status", nextK ? (nextLeft != null ? "~" + fmtDur(nextLeft) : "-") : x.status, "text-sky-300")}
       </div>`
     : `<div class="mb-3 rounded-lg border border-edge bg-ink/50 p-3 text-sm">Closed: <b class="${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : ""}">${x.status}${x.result_r != null ? " " + (x.result_r > 0 ? "+" : "") + x.result_r + "R" : ""}</b> · ${slTime(x.closed_at)}</div>`;
   const entryBlock = `<div class="mb-3 rounded-lg border border-edge bg-ink/50 p-3 text-sm">
     <div class="flex justify-between py-0.5"><span class="text-slate-400">▶ Entry</span><span class="tabular-nums text-slate-100">${usd(x.entry_mid)} <span class="text-xs text-slate-500">${x.entered_at ? "entered " + slTime(x.entered_at) : "logged " + slTime(x.created_at)}</span></span></div>
     <div class="flex justify-between py-0.5"><span class="text-rose-400">■ Stop</span><span class="tabular-nums text-rose-300">${usd(x.stop)}${riskPct != null ? ` (-${riskPct}%)` : ""}</span></div>
-    <div class="flex justify-between py-0.5"><span class="text-slate-400">Confidence</span><span class="text-slate-200">${x.confidence != null ? x.confidence + "%" : "—"}</span></div>
+    <div class="flex justify-between py-0.5"><span class="text-slate-400">Confidence</span><span class="text-slate-200">${x.confidence != null ? x.confidence + "%" : "-"}</span></div>
   </div>`;
   $("trade-body").innerHTML = `${rightNow}${entryBlock}
-    <h4 class="mb-2 text-sm font-semibold text-slate-300">Target ladder — how far & how long to each TP</h4>
+    <h4 class="mb-2 text-sm font-semibold text-slate-300">Target ladder - how far & how long to each TP</h4>
     <div>${steps}</div>
     <p class="mt-2 text-[11px] text-slate-500">Each TP is 1R/2R/3R off your risk. Times are ATR-based estimates in Sri Lanka time; "~left" counts down from your entry estimate.</p>`;
 }
@@ -348,19 +348,19 @@ function renderTrackDiag(s) {
   let tone, msg;
   if (eligible.length) {
     tone = "border-sky-500/40 bg-sky-500/10 text-sky-200";
-    msg = `<b>${eligible.length}</b> signal${eligible.length === 1 ? "" : "s"} currently qualify (≥ ${thr}% confidence): ${eligible.slice(0, 6).map((x) => x.symbol).join(", ")}. These get logged automatically within ~${Math.max(3, CONFIG.indicatorRefreshSec || 60)}s and will appear here as <b>open</b> trades — wins/losses show once price reaches a target or stop.`;
+    msg = `<b>${eligible.length}</b> signal${eligible.length === 1 ? "" : "s"} currently qualify (≥ ${thr}% confidence): ${eligible.slice(0, 6).map((x) => x.symbol).join(", ")}. These get logged automatically within ~${Math.max(3, CONFIG.indicatorRefreshSec || 60)}s and will appear here as <b>open</b> trades - wins/losses show once price reaches a target or stop.`;
   } else if (actionable.length) {
     tone = "border-amber-500/40 bg-amber-500/10 text-amber-200";
     msg = `${actionable.length} setup${actionable.length === 1 ? "" : "s"} are showing, but none has reached the <b>${thr}%</b> confidence needed to be tracked yet. Lower <code>TRACK_MIN_CONFIDENCE</code> to log more, or wait for a stronger trend.`;
   } else {
     tone = "border-slate-500/40 bg-slate-500/10 text-slate-300";
-    msg = `No actionable setups right now${CONFIG.source ? " on " + CONFIG.source : ""} — the market may be ranging, so nothing qualifies to track. Check back, or try another timeframe.`;
+    msg = `No actionable setups right now${CONFIG.source ? " on " + CONFIG.source : ""} - the market may be ranging, so nothing qualifies to track. Check back, or try another timeframe.`;
   }
   const durNote = CONFIG.dbError
-    ? `<span class="text-rose-300">⚠ Database connection failed — using in-memory tracking. (${CONFIG.dbError}) Check that <code>DATABASE_URL</code> is set to the Railway Postgres reference.</span>`
+    ? `<span class="text-rose-300">⚠ Database connection failed - using in-memory tracking. (${CONFIG.dbError}) Check that <code>DATABASE_URL</code> is set to the Railway Postgres reference.</span>`
     : CONFIG.durable
-    ? `<span class="text-emerald-300">History is durable (Postgres) — it survives redeploys.</span>`
-    : `<span class="text-amber-300">Tracking is in-memory — it resets on every redeploy. Set <code>DATABASE_URL</code> (Railway Postgres) to keep your track record.</span>`;
+    ? `<span class="text-emerald-300">History is durable (Postgres) - it survives redeploys.</span>`
+    : `<span class="text-amber-300">Tracking is in-memory - it resets on every redeploy. Set <code>DATABASE_URL</code> (Railway Postgres) to keep your track record.</span>`;
   el.className = "mb-3 rounded-lg border px-3 py-2 text-xs " + tone;
   el.innerHTML = `${msg}<div class="mt-1">${durNote}</div>`;
 }
@@ -392,7 +392,7 @@ function closeChart() {
   const m = $("chart-modal"); m.classList.add("hidden"); m.classList.remove("flex");
 }
 async function openChart(sym, tfv) {
-  if (typeof LightweightCharts === "undefined") { alert("Chart library still loading — try again in a moment."); return; }
+  if (typeof LightweightCharts === "undefined") { alert("Chart library still loading - try again in a moment."); return; }
   const m = $("chart-modal"); m.classList.remove("hidden"); m.classList.add("flex");
   $("chart-title").innerHTML = `<span style="color:${coinColor(sym)}">${sym}</span> · ${tfv}`;
   $("chart-plan").innerHTML = "";
@@ -418,7 +418,7 @@ async function openChart(sym, tfv) {
   const closes = data.candles.map((k) => k.close), times = data.candles.map((k) => k.time);
   [[20, "#818cf8"], [50, "#22d3ee"], [200, "#f59e0b"]].forEach(([p, col]) => { const s = c.addLineSeries({ color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }); s.setData(emaSeries(closes, times, p)); });
   $("chart-legend").classList.remove("hidden");
-  $("chart-legend").innerHTML = `EMA <span style="color:#818cf8">20</span> <span style="color:#22d3ee">50</span> <span style="color:#f59e0b">200</span> · <span style="color:#818cf8">┈ entry</span> <span style="color:#f43f5e">— stop</span> <span style="color:#10b981">┈ TP</span>`;
+  $("chart-legend").innerHTML = `EMA <span style="color:#818cf8">20</span> <span style="color:#22d3ee">50</span> <span style="color:#f59e0b">200</span> · <span style="color:#818cf8">┈ entry</span> <span style="color:#f43f5e">- stop</span> <span style="color:#10b981">┈ TP</span>`;
 
   const sig = (last.signals || []).find((x) => x.symbol === sym);
   if (sig && sig.entry) {
@@ -433,19 +433,19 @@ async function openChart(sym, tfv) {
       `<span class="pill bg-slate-800 text-rose-300">Stop ${usd(sig.stop.priceUsd)} (-${sig.stop.riskPct}%)</span>`,
       ...sig.targets.map((t) => `<span class="pill bg-slate-800 text-emerald-300">${t.name} +${t.gainPct}% · ${usd(t.priceUsd)} · ${t.etaLabel}</span>`),
     ].join(" ");
-    // "Why these lines" — how each level on the chart was decided.
+    // "Why these lines" - how each level on the chart was decided.
     const why = $("chart-why");
     why.classList.remove("hidden");
     why.innerHTML = `
-      <div class="mb-1 font-semibold text-slate-300">Why these lines — how the trade was decided</div>
+      <div class="mb-1 font-semibold text-slate-300">Why these lines - how the trade was decided</div>
       <ul class="space-y-1.5">
-        <li><span class="font-medium" style="color:#818cf8">┈ Entry</span> — ${sig.entry.why || "pullback into the EMA20/VWAP zone."}</li>
-        <li><span class="font-medium" style="color:#f43f5e">— Stop</span> — ${sig.stop.why || "beyond the recent swing ±ATR."}</li>
-        <li><span class="font-medium" style="color:#10b981">┈ TP1/2/3</span> — ${sig.targetsWhy || "1R / 2R / 3R off your risk."}</li>
+        <li><span class="font-medium" style="color:#818cf8">┈ Entry</span> - ${sig.entry.why || "pullback into the EMA20/VWAP zone."}</li>
+        <li><span class="font-medium" style="color:#f43f5e">- Stop</span> - ${sig.stop.why || "beyond the recent swing ±ATR."}</li>
+        <li><span class="font-medium" style="color:#10b981">┈ TP1/2/3</span> - ${sig.targetsWhy || "1R / 2R / 3R off your risk."}</li>
       </ul>
       <div class="mt-2 border-t border-edge pt-2 text-slate-500"><b class="text-slate-400">Direction call:</b> ${(sig.reasons || []).slice(0, 5).join(" · ") || "trend filter"}</div>`;
   } else {
-    $("chart-plan").innerHTML = '<span class="pill bg-slate-800 text-slate-400">No active setup — chart for reference.</span>';
+    $("chart-plan").innerHTML = '<span class="pill bg-slate-800 text-slate-400">No active setup - chart for reference.</span>';
     $("chart-why").classList.add("hidden");
   }
   c.timeScale().fitContent();
@@ -459,12 +459,12 @@ async function openChart(sym, tfv) {
       const wr = b.winRatePct;
       $("chart-bt").innerHTML = [
         `<span class="pill border border-edge bg-panel">Backtest ${b.bars} bars</span>`,
-        `<span class="pill bg-slate-800">Win <b class="${wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-sky-400" : "text-rose-400"}">${wr ?? "—"}%</b></span>`,
+        `<span class="pill bg-slate-800">Win <b class="${wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-sky-400" : "text-rose-400"}">${wr ?? "-"}%</b></span>`,
         `<span class="pill bg-slate-800">Trades ${b.trades}</span>`,
-        `<span class="pill bg-slate-800 text-emerald-300">TP1 ${b.tp1RatePct ?? "—"}%</span>`,
-        `<span class="pill bg-slate-800 text-emerald-300">TP2 ${b.tp2RatePct ?? "—"}%</span>`,
-        `<span class="pill bg-slate-800 text-emerald-300">TP3 ${b.tp3RatePct ?? "—"}%</span>`,
-        `<span class="pill bg-slate-800">Avg <b class="${b.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${b.avgR ?? "—"}R</b></span>`,
+        `<span class="pill bg-slate-800 text-emerald-300">TP1 ${b.tp1RatePct ?? "-"}%</span>`,
+        `<span class="pill bg-slate-800 text-emerald-300">TP2 ${b.tp2RatePct ?? "-"}%</span>`,
+        `<span class="pill bg-slate-800 text-emerald-300">TP3 ${b.tp3RatePct ?? "-"}%</span>`,
+        `<span class="pill bg-slate-800">Avg <b class="${b.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${b.avgR ?? "-"}R</b></span>`,
       ].join(" ");
     } catch (e) { $("chart-bt").innerHTML = `<span class="pill bg-slate-800 text-rose-400">${e.message}</span>`; }
   };
@@ -492,7 +492,7 @@ function indicatorRows(ind, sig) {
 }
 async function openAnalysis(sym, tfv) {
   const m = $("analysis-modal"); m.classList.remove("hidden"); m.classList.add("flex");
-  $("an-title").innerHTML = `<span style="color:${coinColor(sym)}">${sym}</span> · ${tfv} — full analysis`;
+  $("an-title").innerHTML = `<span style="color:${coinColor(sym)}">${sym}</span> · ${tfv} - full analysis`;
   $("an-body").innerHTML = '<p class="py-10 text-center text-slate-500">Analyzing across timeframes…</p>';
   let a;
   try { a = await api(`/api/analysis/${sym}?tf=${encodeURIComponent(tfv)}`); }
@@ -501,7 +501,7 @@ async function openAnalysis(sym, tfv) {
   const d = DIR[s.direction] || DIR.NEUTRAL;
   // Multi-timeframe agreement
   const tfRows = Object.entries(a.perTimeframe || {}).map(([t, p]) => p.error
-    ? `<td class="px-2 py-1 text-center text-slate-600">—</td>`
+    ? `<td class="px-2 py-1 text-center text-slate-600">-</td>`
     : `<td class="px-2 py-1 text-center">${DIRPILL(p.direction)}<div class="text-[11px] text-slate-500">${p.confidence}%</div></td>`).join("");
   const tfHead = Object.keys(a.perTimeframe || {}).map((t) => `<th class="px-2 py-1 text-center text-xs uppercase text-slate-500">${t}</th>`).join("");
   const consCls = a.consensus === "LONG" ? "text-emerald-400" : a.consensus === "SHORT" ? "text-rose-400" : "text-amber-400";
@@ -518,10 +518,10 @@ async function openAnalysis(sym, tfv) {
         <div><b class="text-slate-300">Stop:</b> ${s.stop.why || ""}</div>
         <div><b class="text-slate-300">Targets:</b> ${s.targetsWhy || ""}</div>
       </div>
-    </div>` : `<p class="text-slate-400">${s.note || "No active setup — stand aside."}</p>`;
+    </div>` : `<p class="text-slate-400">${s.note || "No active setup - stand aside."}</p>`;
   const bt = a.backtest && !a.backtest.error ? a.backtest : null;
   const btBlock = bt
-    ? `<div class="flex flex-wrap gap-2 text-xs"><span class="pill border border-edge bg-panel">Backtest ${bt.bars} bars</span><span class="pill bg-slate-800">Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "—"}%</b></span><span class="pill bg-slate-800">${bt.trades} trades</span><span class="pill bg-slate-800 text-emerald-300">TP1 ${bt.tp1RatePct ?? "—"}%</span><span class="pill bg-slate-800">Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "—"}R</b></span></div>`
+    ? `<div class="flex flex-wrap gap-2 text-xs"><span class="pill border border-edge bg-panel">Backtest ${bt.bars} bars</span><span class="pill bg-slate-800">Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "-"}%</b></span><span class="pill bg-slate-800">${bt.trades} trades</span><span class="pill bg-slate-800 text-emerald-300">TP1 ${bt.tp1RatePct ?? "-"}%</span><span class="pill bg-slate-800">Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "-"}R</b></span></div>`
     : `<p class="text-xs text-slate-500">${a.backtest && a.backtest.error ? "Backtest: " + a.backtest.error : "Backtest unavailable."}</p>`;
   $("an-body").innerHTML = `
     <div class="mb-4 flex flex-wrap items-center gap-3">
@@ -550,7 +550,7 @@ async function openAnalysis(sym, tfv) {
     <div class="mb-4 flex flex-wrap gap-1">${pats}</div>
 
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Why this call</h4>
-    <div class="mb-4 flex flex-wrap gap-1">${(s.reasons || []).map((r) => `<span class="pill bg-slate-800 text-slate-300">${r}</span>`).join(" ") || '<span class="text-slate-500">—</span>'}</div>
+    <div class="mb-4 flex flex-wrap gap-1">${(s.reasons || []).map((r) => `<span class="pill bg-slate-800 text-slate-300">${r}</span>`).join(" ") || '<span class="text-slate-500">-</span>'}</div>
 
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Historical backtest (${tfv})</h4>
     <div class="mb-4">${btBlock}</div>
@@ -558,7 +558,7 @@ async function openAnalysis(sym, tfv) {
     <div class="flex gap-2">
       <button id="an-chart" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm hover:bg-edge">📈 Open chart</button>
     </div>
-    <p class="mt-3 text-[11px] text-slate-500">Educational only — not financial advice. Always use your own stop.</p>`;
+    <p class="mt-3 text-[11px] text-slate-500">Educational only - not financial advice. Always use your own stop.</p>`;
   const cb = $("an-chart"); if (cb) cb.onclick = () => { closeAnalysis(); openChart(sym, tfv); };
 }
 
@@ -573,7 +573,7 @@ async function load() {
     $("empty").classList.remove("hidden");
     $("empty").textContent = e.message;
   }
-  // Track Record is NOT refreshed on the 5s signals tick (too noisy) — it updates
+  // Track Record is NOT refreshed on the 5s signals tick (too noisy) - it updates
   // on tab-open, manual Rescan, and a gentle timer (see init()).
 }
 
@@ -624,7 +624,7 @@ async function loadSettings() {
     $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
     let note = "";
     if (s.lastError) note += `<span class="text-rose-400">⚠ ${s.lastError}</span><br>`;
-    if (!s.durableSettings) note += '<span class="text-amber-400">Note: no database — keys reset on redeploy. Set DATABASE_URL to persist.</span>';
+    if (!s.durableSettings) note += '<span class="text-amber-400">Note: no database - keys reset on redeploy. Set DATABASE_URL to persist.</span>';
     $("set-status").innerHTML = note;
   } catch (e) { /* ignore */ }
   loadTestnetTrades();

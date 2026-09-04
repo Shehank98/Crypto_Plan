@@ -1,8 +1,8 @@
 /**
- * Crypto Scalping Signal Engine — signals + live outcome tracking.
+ * Crypto Scalping Signal Engine - signals + live outcome tracking.
  *
  * - Scans the top-N most-liquid markets across whichever exchange is reachable
- *   (Binance -> Bybit -> OKX, Coinbase per-coin fallback) — a minimal ccxt-style
+ *   (Binance -> Bybit -> OKX, Coinbase per-coin fallback) - a minimal ccxt-style
  *   unified layer so it works even where Binance is geo-blocked.
  * - Trend-following signals: direction, confidence, entry zone, stop, TP1/2/3
  *   (R-multiples) with ETA, and a price forecast.
@@ -37,7 +37,7 @@ const FALLBACK_USD_LKR = Number(process.env.FALLBACK_USD_LKR || 300);
 const MAX_WAIT_CANDLES = Number(process.env.MAX_WAIT_CANDLES || 12); // wait for entry fill
 const MAX_HOLD_CANDLES = Number(process.env.MAX_HOLD_CANDLES || 60); // max time in trade
 const EXCHANGE_ORDER = (process.env.EXCHANGES || "binance").split(",").map((s) => s.trim().toLowerCase());
-// Binance public hosts tried in order — data-api.binance.vision is the market-data
+// Binance public hosts tried in order - data-api.binance.vision is the market-data
 // mirror that usually works even where api.binance.com is geo-blocked.
 const BINANCE_HOSTS = (process.env.BINANCE_HOSTS || "https://data-api.binance.vision,https://api.binance.com,https://api-gcp.binance.com,https://api1.binance.com").split(",").map((h) => h.trim());
 
@@ -47,7 +47,7 @@ const LEVERAGED = /(UP|DOWN|BULL|BEAR|[0-9]+L|[0-9]+S)$/;
 
 const http = axios.create({ timeout: 12000, headers: { "User-Agent": "signal-engine/3.0" } });
 const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
-// Price rounding by SIGNIFICANT figures, not fixed decimals — otherwise sub-cent
+// Price rounding by SIGNIFICANT figures, not fixed decimals - otherwise sub-cent
 // coins (PEPE ~0.0000012, SHIB, BONK…) collapse to the same value at 6 decimals,
 // making entry/stop/targets identical (risk 0) so the trade never fills and always
 // EXPIRES. 8 sig figs keeps precision across both huge and tiny prices.
@@ -66,7 +66,7 @@ function bollinger(v, p = 20, mult = 2) { if (!v || v.length < p) return null; c
 function atr(h, l, c, p = 14) { if (!c || c.length < p + 1) return null; const tr = []; for (let i = 1; i < c.length; i++) tr.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]))); return sma(tr, p); }
 function vwap(h, l, c, vol) { let pv = 0, v = 0; for (let i = 0; i < c.length; i++) { const tp = (h[i] + l[i] + c[i]) / 3; pv += tp * (vol[i] || 0); v += vol[i] || 0; } return v ? pv / v : null; }
 function mfi(h, l, c, vol, p = 14) { if (!c || c.length < p + 1) return null; let pos = 0, neg = 0; for (let i = c.length - p; i < c.length; i++) { const tp = (h[i] + l[i] + c[i]) / 3, ptp = (h[i - 1] + l[i - 1] + c[i - 1]) / 3; const mf = tp * (vol[i] || 0); if (tp > ptp) pos += mf; else if (tp < ptp) neg += mf; } if (neg === 0) return 100; return 100 - 100 / (1 + pos / neg); }
-// ADX (Wilder) — trend strength; filters choppy markets.
+// ADX (Wilder) - trend strength; filters choppy markets.
 function adx(h, l, c, p = 14) {
   if (!c || c.length < p * 2 + 1) return null;
   const tr = [], pdm = [], mdm = [];
@@ -85,7 +85,7 @@ function adx(h, l, c, p = 14) {
   for (let i = p; i < dx.length; i++) a = (a * (p - 1) + dx[i]) / p;
   return a;
 }
-// Stochastic RSI (0..1) — momentum timing.
+// Stochastic RSI (0..1) - momentum timing.
 function stochRsi(c, p = 14) {
   if (!c || c.length < p * 2) return null;
   const rs = [];
@@ -95,7 +95,7 @@ function stochRsi(c, p = 14) {
   return mx > mn ? (last - mn) / (mx - mn) : 0.5;
 }
 // --- More TA-Lib-style indicators (reimplemented natively, no ta-lib dep) ---
-// CCI — Commodity Channel Index; >100 overbought, <-100 oversold.
+// CCI - Commodity Channel Index; >100 overbought, <-100 oversold.
 function cci(h, l, c, p = 20) {
   if (!c || c.length < p) return null;
   const tp = c.map((_, i) => (h[i] + l[i] + c[i]) / 3);
@@ -103,13 +103,13 @@ function cci(h, l, c, p = 20) {
   const md = recent.reduce((a, b) => a + Math.abs(b - ma), 0) / p;
   return md === 0 ? 0 : (tp[tp.length - 1] - ma) / (0.015 * md);
 }
-// Williams %R — -20 overbought, -80 oversold.
+// Williams %R - -20 overbought, -80 oversold.
 function williamsR(h, l, c, p = 14) {
   if (!c || c.length < p) return null;
   const hh = Math.max(...h.slice(-p)), ll = Math.min(...l.slice(-p)), last = c[c.length - 1];
   return hh === ll ? -50 : (-100 * (hh - last)) / (hh - ll);
 }
-// OBV — On-Balance Volume; return the series so we can read its slope.
+// OBV - On-Balance Volume; return the series so we can read its slope.
 function obv(c, vol) {
   if (!c || c.length < 2) return null;
   let o = 0; const arr = [0];
@@ -123,7 +123,7 @@ function slopeOf(arr, n = 10) {
   const denom = Math.max(Math.abs(a), Math.abs(b), 1e-9);
   return (b - a) / denom;
 }
-// Parabolic SAR — trailing stop-and-reverse; returns {sar, bull}.
+// Parabolic SAR - trailing stop-and-reverse; returns {sar, bull}.
 function psar(h, l, step = 0.02, max = 0.2) {
   if (!h || h.length < 5) return null;
   let bull = true, af = step, ep = h[0], sar = l[0];
@@ -178,7 +178,7 @@ async function binanceGet(pathname, params) {
   }
   throw err || new Error("all Binance hosts failed");
 }
-// Set of Binance-listed, TRADING, spot USDT base assets — the tradable universe.
+// Set of Binance-listed, TRADING, spot USDT base assets - the tradable universe.
 let binanceBases = { at: 0, set: null };
 async function getBinanceBases() {
   if (Date.now() - binanceBases.at < 6 * 3600_000 && binanceBases.set) return binanceBases.set;
@@ -289,7 +289,7 @@ async function getOHLCV(base, tf, limit = 210) {
 // ===========================================================================
 // Signal (trend-following)
 // ===========================================================================
-function humanizeEta(minutes) { if (!Number.isFinite(minutes) || minutes <= 0) return "—"; if (minutes < 60) return `~${Math.round(minutes)}m`; if (minutes < 1440) return `~${(minutes / 60).toFixed(1)}h`; return `~${(minutes / 1440).toFixed(1)}d`; }
+function humanizeEta(minutes) { if (!Number.isFinite(minutes) || minutes <= 0) return "-"; if (minutes < 60) return `~${Math.round(minutes)}m`; if (minutes < 1440) return `~${(minutes / 60).toFixed(1)}h`; return `~${(minutes / 1440).toFixed(1)}d`; }
 
 function computeSignal(base, tf, d, fx, opts = {}) {
   const { opens, highs, lows, closes, volumes } = d;
@@ -319,7 +319,7 @@ function computeSignal(base, tf, d, fx, opts = {}) {
     if (mac && ((long && mac.hist > 0) || (!long && mac.hist < 0))) { conf += 14; reasons.push("MACD momentum with trend"); }
     if (vw != null && ((long && price > vw) || (!long && price < vw))) { conf += 8; reasons.push("On trend side of VWAP"); }
     const sep = a ? Math.abs(ema50 - ema200) / a : 0; conf += Math.min(14, sep * 7); if (sep > 1.2) reasons.push("Strong trend");
-    if (r != null) { if (long) { if (r > 85) { conf -= 12; reasons.push("RSI stretched — prefer pullback"); } else if (r > 50) conf += 6; } else if (r < 15) { conf -= 12; reasons.push("RSI stretched — prefer bounce"); } else if (r < 50) conf += 6; }
+    if (r != null) { if (long) { if (r > 85) { conf -= 12; reasons.push("RSI stretched - prefer pullback"); } else if (r > 50) conf += 6; } else if (r < 15) { conf -= 12; reasons.push("RSI stretched - prefer bounce"); } else if (r < 50) conf += 6; }
     // ADX: only trust a trend when it's actually trending (filters chop).
     if (adxV != null) { if (adxV >= 25) { conf += 10; reasons.push(`ADX ${adxV.toFixed(0)} (strong trend)`); } else if (adxV < 18) { conf -= 14; reasons.push(`ADX ${adxV.toFixed(0)} (weak/choppy)`); } }
     // Stochastic RSI: momentum timing for the entry.
@@ -329,12 +329,12 @@ function computeSignal(base, tf, d, fx, opts = {}) {
     // Parabolic SAR: trailing stop on the trend side?
     if (ps) { if ((long && ps.bull) || (!long && !ps.bull)) { conf += 6; reasons.push("Parabolic SAR on trend side"); } else { conf -= 6; reasons.push("Parabolic SAR flipped against"); } }
     // CCI: dip/rally timing within the trend.
-    if (cciV != null) { if (long && cciV < -100) { conf += 4; reasons.push("CCI oversold — good dip entry"); } else if (!long && cciV > 100) { conf += 4; reasons.push("CCI overbought — good rally entry"); } }
+    if (cciV != null) { if (long && cciV < -100) { conf += 4; reasons.push("CCI oversold - good dip entry"); } else if (!long && cciV > 100) { conf += 4; reasons.push("CCI overbought - good rally entry"); } }
     // Candlestick confirmation on the latest bar.
     const patBias = patterns.find((p) => p.bias !== "neutral");
     if (patBias) { if ((long && patBias.bias === "bull") || (!long && patBias.bias === "bear")) { conf += 6; reasons.push(`${patBias.name} confirms`); } else { conf -= 4; reasons.push(`${patBias.name} against the trade`); } }
-    // Higher-timeframe confluence — the biggest accuracy lever.
-    if (opts.htfDir) { if (opts.htfDir === direction) { conf += 8; reasons.push(`Higher timeframe (${opts.htf}) trend agrees`); } else if (opts.htfDir !== "NEUTRAL") { conf -= 16; reasons.push(`Higher timeframe (${opts.htf}) trend conflicts — risky`); } }
+    // Higher-timeframe confluence - the biggest accuracy lever.
+    if (opts.htfDir) { if (opts.htfDir === direction) { conf += 8; reasons.push(`Higher timeframe (${opts.htf}) trend agrees`); } else if (opts.htfDir !== "NEUTRAL") { conf -= 16; reasons.push(`Higher timeframe (${opts.htf}) trend conflicts - risky`); } }
     conf = Math.max(0, Math.min(100, Math.round(conf)));
   }
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
@@ -345,7 +345,7 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
   const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: rp(price), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, patterns, htf: opts.htf || null, htfDir: opts.htfDir || null, generatedAt: new Date().toISOString() };
-  if (direction === "NEUTRAL" || !a) return { ...out, note: "No trend / setup — stand aside." };
+  if (direction === "NEUTRAL" || !a) return { ...out, note: "No trend / setup - stand aside." };
 
   const long = direction === "LONG";
   const anchor = long ? Math.min(ema20 || price, vw || price) : Math.max(ema20 || price, vw || price);
@@ -362,11 +362,11 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   // Plain-English rationale for each drawn level (shown on the chart's "why" panel).
   const riskPct = round((risk / entryMid) * 100, 2);
   const entryWhy = long
-    ? `Buy the pullback into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer — a tighter, higher-reward entry.`
+    ? `Buy the pullback into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer - a tighter, higher-reward entry.`
     : `Sell the bounce into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of shorting the low. The trend is down, so a pop gives a better price with the stop closer.`;
   const stopWhy = long
-    ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${rp(a)}). A close under here breaks the higher-low structure — the uptrend idea is wrong, so exit.`
-    : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${rp(a)}). A close over here breaks the lower-high structure — the downtrend idea is wrong, so exit.`;
+    ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${rp(a)}). A close under here breaks the higher-low structure - the uptrend idea is wrong, so exit.`
+    : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${rp(a)}). A close over here breaks the lower-high structure - the downtrend idea is wrong, so exit.`;
   const targetsWhy = `TP1/TP2/TP3 sit at 1×/2×/3× the ${riskPct}% risked to the stop (R-multiples). ETAs are projected from recent ATR speed (~${rp(perCandle)}/candle).`;
   return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
 }
@@ -376,7 +376,7 @@ async function signalFor(base, tf, fx, opts = {}) {
   catch (e) { return { base, symbol: base, tf, error: e.message }; }
 }
 
-// The next timeframe up — used for multi-timeframe confluence (chains up to 1D).
+// The next timeframe up - used for multi-timeframe confluence (chains up to 1D).
 const HTF_OF = { "15m": "1h", "1h": "4h", "4h": "1d", "1d": null };
 // Build base -> trend direction from a recent higher-TF scan cache (no extra fetches).
 function htfTrendMap(htf) {
@@ -461,7 +461,7 @@ async function scanMarket(tf, force) {
   try {
     const [fx, universe] = await Promise.all([getUsdLkr(), getUniverse(UNIVERSE_SIZE)]);
     // Multi-timeframe confluence: bias each signal by the higher-TF trend (reuses
-    // that TF's cached scan — no extra fetches). Ensure the higher TF stays scanned.
+    // that TF's cached scan - no extra fetches). Ensure the higher TF stays scanned.
     const htf = HTF_OF[tf];
     if (htf) touchTf(htf);
     const htfMap = htf ? htfTrendMap(htf) : null;
@@ -493,7 +493,7 @@ if (useDb) {
   const { Pool } = require("pg");
   const url = process.env.DATABASE_URL;
   // Railway's internal host (postgres.railway.internal) and localhost do NOT speak
-  // SSL — forcing it there throws "server does not support SSL connections", which
+  // SSL - forcing it there throws "server does not support SSL connections", which
   // silently breaks all tracking. Only enable SSL for external/proxied hosts.
   const noSsl = /localhost|127\.0\.0\.1|::1|\.railway\.internal|\.internal(?::\d+)?\/|sslmode=disable/.test(url);
   pool = new Pool({ connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false } });
@@ -531,10 +531,10 @@ async function initStore() {
     await pool.query("SELECT 1");
     console.log("[store] Postgres ready (durable tracking)");
   } catch (e) {
-    // Don't let a bad DB blank the whole app — fall back to in-memory and surface why.
+    // Don't let a bad DB blank the whole app - fall back to in-memory and surface why.
     dbError = e.message;
     useDb = false;
-    console.error("[store] Postgres unavailable — falling back to in-memory tracking:", e.message);
+    console.error("[store] Postgres unavailable - falling back to in-memory tracking:", e.message);
   }
 }
 
@@ -617,7 +617,7 @@ async function monitor(prices) {
   }
 }
 
-// Newest tracked row per symbol|tf|direction — used to stamp live status onto
+// Newest tracked row per symbol|tf|direction - used to stamp live status onto
 // the market cards so you can see "in trade / TP1 hit / stopped" at a glance.
 async function trackedIndex() {
   const rows = await store.recent(400); // newest-first
@@ -951,7 +951,7 @@ function startTelegram() {
     bot.on("message", (m) => chats.add(m.chat.id));
     bot.onText(/\/start/, (m) => bot.sendMessage(m.chat.id, "📡 *Signal Engine*\n/signals – top setups\n/stats – track record", { parse_mode: "Markdown" }));
     bot.onText(/\/signals?$/, async (m) => { const { tf, signals } = await scanMarket(SIGNAL_TF); const top = signals.filter((s) => s.direction !== "NEUTRAL" && !s.error).slice(0, 8); bot.sendMessage(m.chat.id, top.length ? `📡 *Signals* (${tf})\n\n` + top.map((s) => `*${s.symbol}* ${s.direction} ${s.confidence}% (${s.entry.status})\nEntry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)} · SL ${fmtUsd(s.stop.priceUsd)}\n${s.targets.map((t) => `${t.name} ${fmtUsd(t.priceUsd)} ${t.etaLabel}`).join(", ")}`).join("\n\n") : `No ${tf} setups now.`, { parse_mode: "Markdown" }); });
-    bot.onText(/\/stats/, async (m) => { const s = await computeStats(); bot.sendMessage(m.chat.id, `📈 *Track record*\nWin rate: ${s.winRatePct ?? "—"}% (${s.wins}/${s.decided})\nTP1 ${s.tp1RatePct ?? "—"}% · TP2 ${s.tp2RatePct ?? "—"}% · TP3 ${s.tp3RatePct ?? "—"}%\nAvg R: ${s.avgResultR ?? "—"} · Open: ${s.open}${s.durable ? "" : "\n(in-memory — set DATABASE_URL to persist)"}`, { parse_mode: "Markdown" }); });
+    bot.onText(/\/stats/, async (m) => { const s = await computeStats(); bot.sendMessage(m.chat.id, `📈 *Track record*\nWin rate: ${s.winRatePct ?? "-"}% (${s.wins}/${s.decided})\nTP1 ${s.tp1RatePct ?? "-"}% · TP2 ${s.tp2RatePct ?? "-"}% · TP3 ${s.tp3RatePct ?? "-"}%\nAvg R: ${s.avgResultR ?? "-"} · Open: ${s.open}${s.durable ? "" : "\n(in-memory - set DATABASE_URL to persist)"}`, { parse_mode: "Markdown" }); });
     bot.on("polling_error", (e) => console.warn("[telegram]", e.message));
     console.log("[telegram] started");
   } catch (e) { console.warn("[telegram] failed:", e.message); }
