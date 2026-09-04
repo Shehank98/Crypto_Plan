@@ -30,6 +30,19 @@ function seg(el, items, active, on) {
   el.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => on(b.dataset.v)));
 }
 
+// Entry window: is it still worth entering from here (live risk:reward)?
+const WIN = {
+  OPEN: { cls: "bg-emerald-900/60 text-emerald-200", label: "✅ Enter now" },
+  WAIT: { cls: "bg-amber-900/50 text-amber-200", label: "⏳ Wait for pullback" },
+  CHASE: { cls: "bg-orange-900/50 text-orange-200", label: "⚠️ Extended - don't chase" },
+  CLOSED: { cls: "bg-rose-900/50 text-rose-200", label: "⛔ Entry window closed" },
+};
+function entryWindowBadge(e) {
+  if (!e) return "";
+  const w = WIN[e.window] || { cls: "bg-slate-800 text-slate-300", label: e.status || "" };
+  return `<span class="pill ${w.cls}">${w.label}${e.rrNow != null ? ` · R:R ${e.rrNow}:1` : ""}</span>`;
+}
+
 // Coin quality (BTC/ETH-like stability): liquidity + volatility.
 const QCLS = { "Blue-chip": "bg-sky-900/60 text-sky-200", "Solid": "bg-emerald-900/50 text-emerald-200", "Moderate": "bg-amber-900/50 text-amber-200", "Speculative": "bg-rose-900/50 text-rose-200" };
 function fmtVol(n) { n = Number(n) || 0; return n >= 1e9 ? "$" + (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(0) + "M" : "$" + Math.round(n / 1e3) + "K"; }
@@ -83,8 +96,10 @@ function card(s) {
   const readyCls = s.entry.status === "READY" ? "text-emerald-300" : "text-amber-300";
   const tps = s.targets.map((t) => `<div class="flex items-center justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums"><span class="text-emerald-400">+${t.gainPct}%</span> · ${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("");
   const f = s.forecast || {};
-  return `<div class="card glow p-4 cursor-pointer hover:border-indigo-500/40" data-analyze="${s.symbol}" data-tf="${s.tf}" title="Click for full analysis">${head}
-    <div class="mt-2 flex items-center justify-between text-xs"><span class="${readyCls} font-medium">${s.entry.status}</span><span class="text-slate-500">forecast ${f.horizon}: ${usd(f.priceUsd)}</span></div>
+  const closed = s.entry.window === "CLOSED";
+  return `<div class="card glow p-4 cursor-pointer hover:border-indigo-500/40 ${closed ? "opacity-60" : ""}" data-analyze="${s.symbol}" data-tf="${s.tf}" title="Click for full analysis">${head}
+    <div class="mt-2 flex items-center justify-between gap-2 text-xs">${entryWindowBadge(s.entry)}<span class="text-slate-500">forecast ${f.horizon}: ${usd(f.priceUsd)}</span></div>
+    ${s.entry.enterMsg ? `<p class="mt-1 text-[11px] ${closed ? "text-rose-300" : s.entry.window === "OPEN" ? "text-emerald-300" : "text-slate-400"}">${s.entry.enterMsg}</p>` : ""}
     ${trackedBadge(s.tracked)}
     <div class="mt-2 space-y-1 rounded-lg border border-edge bg-ink/50 p-2">
       <div class="flex justify-between text-sm"><span class="text-slate-400">Entry</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} – ${usd(s.entry.high)}</span></div>
@@ -437,6 +452,8 @@ async function openChart(sym, tfv) {
     line(sig.entry.high, "#818cf8", 2, "");
     line(sig.stop.priceUsd, "#f43f5e", 0, "Stop");
     sig.targets.forEach((t) => line(t.priceUsd, "#10b981", 2, `${t.name} (${t.rr}R)`));
+    // Fibonacci golden-pocket (0.5-0.618) as dotted reference lines.
+    if (sig.fib) { line(sig.fib.retr["0.5"], "#a78bfa", 3, "Fib 0.5"); line(sig.fib.retr["0.618"], "#a78bfa", 3, "Fib 0.618"); }
     $("chart-plan").innerHTML = [
       `<span class="pill ${sig.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${sig.direction} ${sig.confidence}%</span>`,
       `<span class="pill bg-slate-800">Entry ${usd(sig.entry.low)}–${usd(sig.entry.high)}</span>`,
@@ -533,6 +550,26 @@ async function openAnalysis(sym, tfv) {
   const btBlock = bt
     ? `<div class="flex flex-wrap gap-2 text-xs"><span class="pill border border-edge bg-panel">Backtest ${bt.bars} bars</span><span class="pill bg-slate-800">Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "-"}%</b></span><span class="pill bg-slate-800">${bt.trades} trades</span><span class="pill bg-slate-800 text-emerald-300">TP1 ${bt.tp1RatePct ?? "-"}%</span><span class="pill bg-slate-800">Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "-"}R</b></span></div>`
     : `<p class="text-xs text-slate-500">${a.backtest && a.backtest.error ? "Backtest: " + a.backtest.error : "Backtest unavailable."}</p>`;
+  // Entry timing + risk:reward
+  const e = s.entry || {};
+  const timingBlock = e.window ? `
+    <div class="mb-4 rounded-lg border border-edge bg-ink/50 p-3">
+      <div class="mb-1 flex flex-wrap items-center gap-2">${entryWindowBadge(e)}${e.inGolden ? '<span class="pill bg-indigo-900/60 text-indigo-200">🎯 Fib golden pocket</span>' : ""}</div>
+      <p class="text-xs ${e.window === "CLOSED" ? "text-rose-300" : e.window === "OPEN" ? "text-emerald-300" : "text-slate-400"}">${e.enterMsg || ""}</p>
+      ${s.rr ? `<div class="mt-2 flex flex-wrap gap-2 text-xs"><span class="pill bg-slate-800">Risk ${s.rr.riskPct}%</span><span class="pill bg-slate-800 text-emerald-300">R:R to TP1 ${s.rr.toTp1}</span><span class="pill bg-slate-800 text-emerald-300">TP2 ${s.rr.toTp2}</span><span class="pill bg-slate-800 text-emerald-300">TP3 ${s.rr.toTp3}</span>${e.rrNow != null ? `<span class="pill ${e.rrNow >= 2 ? "bg-emerald-900 text-emerald-200" : e.rrNow >= 1 ? "bg-amber-900 text-amber-200" : "bg-rose-900 text-rose-200"}">R:R from price now ${e.rrNow}:1</span>` : ""}</div>` : ""}
+    </div>` : "";
+  // Fibonacci levels
+  const fibBlock = s.fib ? `
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">Fibonacci (swing ${usd(s.fib.swingLow)} - ${usd(s.fib.swingHigh)})</h4>
+    <div class="mb-4 overflow-x-auto"><table class="w-full text-xs"><tbody>
+      <tr class="border-b border-edge/50"><td class="py-1 text-slate-500">Pullback (entry)</td><td class="py-1 text-right">0.382 <b class="text-slate-200">${usd(s.fib.retr["0.382"])}</b></td><td class="py-1 text-right">0.5 <b class="text-slate-200">${usd(s.fib.retr["0.5"])}</b></td><td class="py-1 text-right text-indigo-300">0.618 <b>${usd(s.fib.retr["0.618"])}</b></td><td class="py-1 text-right">0.786 <b class="text-slate-200">${usd(s.fib.retr["0.786"])}</b></td></tr>
+      <tr><td class="py-1 text-slate-500">Extension (targets)</td><td class="py-1 text-right text-emerald-300" colspan="2">1.272 <b>${usd(s.fib.ext["1.272"])}</b></td><td class="py-1 text-right text-emerald-300" colspan="2">1.618 <b>${usd(s.fib.ext["1.618"])}</b></td></tr>
+    </tbody></table></div>
+    <p class="mb-4 text-[11px] text-slate-500">The <b class="text-indigo-300">0.5-0.618 "golden pocket"</b> is the classic high-probability pullback entry; extensions project where price often travels next.</p>` : "";
+  // Trading psychology
+  const psychBlock = (s.discipline && s.discipline.length) ? `
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">🧠 Trading psychology &amp; discipline</h4>
+    <ul class="mb-4 space-y-1 text-xs text-slate-400">${s.discipline.map((d2) => `<li class="flex gap-2"><span class="text-slate-600">•</span><span>${d2}</span></li>`).join("")}</ul>` : "";
   $("an-body").innerHTML = `
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <span class="pill border ${d.cls} text-sm">${s.direction} ${s.confidence ?? 0}%</span>
@@ -541,6 +578,7 @@ async function openAnalysis(sym, tfv) {
       ${s.htf && s.htfDir ? `<span class="pill bg-slate-800 text-xs">${s.htfDir === s.direction ? "✅" : "⚠️"} ${s.htf} trend ${s.htfDir}</span>` : ""}
     </div>
     <div class="mb-4 h-2 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence ?? 0}%;background:${d.bar}" class="h-full"></div></div>
+    ${timingBlock}
 
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Multi-timeframe agreement</h4>
     <div class="mb-1 overflow-x-auto"><table class="w-full"><thead><tr>${tfHead}</tr></thead><tbody><tr>${tfRows}</tr></tbody></table></div>
@@ -557,9 +595,11 @@ async function openAnalysis(sym, tfv) {
       </div>
     </div>
 
+    ${fibBlock}
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Candlestick patterns (latest bar)</h4>
     <div class="mb-4 flex flex-wrap gap-1">${pats}</div>
 
+    ${psychBlock}
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Why this call</h4>
     <div class="mb-4 flex flex-wrap gap-1">${(s.reasons || []).map((r) => `<span class="pill bg-slate-800 text-slate-300">${r}</span>`).join(" ") || '<span class="text-slate-500">-</span>'}</div>
 

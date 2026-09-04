@@ -53,6 +53,20 @@ a **multi-timeframe agreement** table (15m/1h/4h/1d) with a consensus verdict, e
 a plain-English read, detected candlestick patterns, the full trade plan with reasons, and a
 historical backtest — all in one popup.
 
+**Entry window (don't chase):** every card shows whether it's still worth entering *from the
+current price* — **Enter now** (in the zone), **Wait for pullback**, **Extended - don't chase**,
+or **Entry window closed** (price ran, risk:reward gone). It's driven by the **live risk:reward**
+from the current price to TP1, and closed setups are dimmed.
+
+**Risk:reward + Fibonacci:** the analysis shows **R:R to each target** (1:1 / 2:1 / 3:1) and the
+**live R:R from the current price**, plus **Fibonacci** retracement (0.382 / 0.5 / 0.618 / 0.786)
+and extension (1.272 / 1.618) levels — with the **0.5-0.618 "golden pocket"** flagged and drawn
+on the chart.
+
+**Trading psychology:** each signal carries a short **discipline checklist** — size by the 1-2%
+rule, take partial at TP1 and move the stop to break-even, never widen a stop, and a FOMO warning
+when price has already run.
+
 **Live status on every card:** once a signal is logged, its card shows what happened next —
 **⏳ Waiting for entry**, **🔵 In trade**, **🎯 TP1/TP2/TP3 hit**, **✅ WIN +R**, or
 **🛑 Stopped** — plus the current **Open R** while it's live. So you don't just see the plan,

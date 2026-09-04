@@ -368,7 +368,48 @@ function computeSignal(base, tf, d, fx, opts = {}) {
     ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${rp(a)}). A close under here breaks the higher-low structure - the uptrend idea is wrong, so exit.`
     : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${rp(a)}). A close over here breaks the lower-high structure - the downtrend idea is wrong, so exit.`;
   const targetsWhy = `TP1/TP2/TP3 sit at 1×/2×/3× the ${riskPct}% risked to the stop (R-multiples). ETAs are projected from recent ATR speed (~${rp(perCandle)}/candle).`;
-  return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
+
+  // --- Entry timing / window: is it still worth entering from HERE? ---
+  // Live risk:reward from the current price to TP1. As price runs past the entry
+  // zone, reward shrinks and risk grows, so R:R collapses -> the window closes.
+  const rewardNow = long ? targets[0].priceUsd - price : price - targets[0].priceUsd;
+  const riskNow = long ? price - stop : stop - price;
+  const rrNow = riskNow > 0 ? round(rewardNow / riskNow, 2) : null;
+  const pastTp1 = long ? price >= targets[0].priceUsd : price <= targets[0].priceUsd;
+  const beyondZone = long ? price > entryHigh : price < entryLow;     // already moved off the pullback
+  const belowZone = long ? price < entryLow : price > entryHigh;      // still pulling back (good)
+  let window, enterMsg;
+  if (pastTp1 || (rrNow != null && rrNow < 1)) { window = "CLOSED"; enterMsg = "Entry window closed - price already ran, risk:reward is poor now. Wait for the next setup."; }
+  else if (inZone) { window = "OPEN"; enterMsg = "Enter now - price is in the entry zone."; }
+  else if (belowZone) { window = "WAIT"; enterMsg = long ? "Wait - price is below the zone; let it base and reclaim, or buy the dip only with a plan." : "Wait - price is above the zone; let it stall before shorting."; }
+  else if (beyondZone) { window = rrNow != null && rrNow >= 1.5 ? "CHASE" : "CLOSED"; enterMsg = rrNow != null && rrNow >= 1.5 ? "Slightly extended - only enter on a small pullback; don't chase the candle." : "Missed the ideal entry - chasing here gives poor risk:reward. Wait for the next pullback."; }
+  else { window = "WAIT"; enterMsg = "Wait for price to reach the entry zone."; }
+
+  // --- Fibonacci retracement (pullback) + extension (targets) from the swing ---
+  const range = swingHigh - swingLow || (a || 1);
+  const fibRetr = (r) => rp(long ? swingHigh - range * r : swingLow + range * r);
+  const fibExt = (r) => rp(long ? swingLow + range * r : swingHigh - range * (r));
+  const fib = {
+    swingLow: rp(swingLow), swingHigh: rp(swingHigh), direction: long ? "up" : "down",
+    retr: { "0.382": fibRetr(0.382), "0.5": fibRetr(0.5), "0.618": fibRetr(0.618), "0.786": fibRetr(0.786) },
+    ext: { "1.272": fibExt(1.272), "1.618": fibExt(1.618) },
+    goldenLow: fibRetr(0.618), goldenHigh: fibRetr(0.5), // the 0.5-0.618 "golden pocket"
+  };
+  const inGolden = price >= Math.min(fib.goldenLow, fib.goldenHigh) && price <= Math.max(fib.goldenLow, fib.goldenHigh);
+
+  // --- Trading psychology / discipline checklist ---
+  const discipline = [
+    `Risk only 1-2% of your account on this trade. At the ${riskPct}% stop, that sets your position size - don't oversize.`,
+    "Take partial profit at TP1 and move your stop to break-even - securing TP1 turns the trade risk-free.",
+    "Never move your stop further away to avoid a loss. The plan is the plan; a stopped trade is a small, expected cost.",
+  ];
+  if (window === "CLOSED" || window === "CHASE") discipline.unshift("FOMO check: price already moved. Chasing wrecks your risk:reward - there's always another setup.");
+  if (inGolden) discipline.unshift("Price is in the 0.5-0.618 Fibonacci 'golden pocket' - a high-probability pullback entry.");
+  if (r != null && ((long && r > 78) || (!long && r < 22))) discipline.push("Momentum is stretched (RSI) - wait for a pullback rather than buying the top / selling the bottom.");
+  if (opts.htfDir && opts.htfDir !== direction && opts.htfDir !== "NEUTRAL") discipline.push(`Higher timeframe (${opts.htf}) disagrees - reduce size or skip; trade with the bigger trend.`);
+
+  const rr = { toTp1: `${targets[0].rr}:1`, toTp2: `${targets[1].rr}:1`, toTp3: `${targets[2].rr}:1`, riskPct };
+  return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, window, rrNow, enterMsg, inGolden, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, rr, fib, discipline, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
 }
 
 async function signalFor(base, tf, fx, opts = {}) {
