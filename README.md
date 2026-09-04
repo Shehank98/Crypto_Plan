@@ -93,8 +93,36 @@ dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
 - `GET /api/signals?tf=1h&only=actionable&dir=LONG&limit=20` — the market scan (cached ~60s)
 - `GET /api/signal/:symbol?tf=1h` — one coin, computed fresh
 - `POST /api/rescan?tf=1h` — force a fresh scan
+- `GET /api/candles/:symbol?tf=1h` — OHLC candles for the chart
+- `GET /api/backtest/:symbol?tf=1h&bars=1000` — replay the signal rules over history (see below)
 - `GET /api/stats` — track record (win rate, TP hit rates, avg R)
 - `GET /api/tracked` — open (live) + recently-resolved signals
+
+## Backtest — did these rules actually work?
+
+Click **⏮ Backtest** on any chart (or call `GET /api/backtest/:symbol?tf=1h`) to
+**replay the exact signal rules over historical candles** for that coin+timeframe. It
+walks the history bar by bar, and for every non-NEUTRAL signal simulates the trade forward
+using each future candle's high/low (pessimistic: a bar that touches both stop and target
+counts the stop). You get:
+
+- **Win rate** (wins ÷ decided), **TP1 / TP2 / TP3 hit rates**, and **avg R**
+- Trade / entered / win / loss counts
+
+This is the *same* `computeSignal` logic the live scanner uses, so a good backtest is real
+evidence the setup has an edge on that pair — not a separate, prettier model.
+
+## Track Record tab
+
+The **🎯 Track Record** tab separates the confusing multi-timeframe view into one place:
+
+- **Filter by timeframe** (5m / 15m / 1h / 4h / All) and **search a coin**.
+- **Win rate by timeframe** table so you can see which timeframe is pulling its weight.
+- **Live / open trades** with a **progress-to-TP1 bar** and current **Open R** and gain %.
+- **Recent results** with the realized **gain %** per closed trade.
+- **Open R** = current profit in units of risk (`1R` = the entry→stop distance). `+1R`
+  means you're up by exactly the amount you risked. Each TP row also shows the **+% gain**
+  from entry to that target so "how far to TP1" is obvious at a glance.
 
 ## Local dev
 

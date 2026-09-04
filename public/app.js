@@ -44,7 +44,7 @@ function card(s) {
     return `<div class="card p-4">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div>${chartBtn}</div></div>`;
   }
   const readyCls = s.entry.status === "READY" ? "text-emerald-300" : "text-amber-300";
-  const tps = s.targets.map((t) => `<div class="flex justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums">${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("");
+  const tps = s.targets.map((t) => `<div class="flex items-center justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums"><span class="text-emerald-400">+${t.gainPct}%</span> · ${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("");
   const f = s.forecast || {};
   return `<div class="card glow p-4">${head}
     <div class="mt-2 flex items-center justify-between text-xs"><span class="${readyCls} font-medium">${s.entry.status}</span><span class="text-slate-500">forecast ${f.horizon}: ${usd(f.priceUsd)}</span></div>
@@ -99,33 +99,64 @@ function renderByTf(byTf) {
 }
 
 const tfPill = (t) => `<span class="pill bg-slate-800 text-slate-400">${t}</span>`;
+const trackFilter = (arr) => (arr || []).filter((x) => (trackTf === "all" || x.tf === trackTf) && (!trackSearch || x.symbol.includes(trackSearch)));
 
-function renderTracked(t) {
-  const openRows = (t.open || []).map((x) => `<tr class="border-b border-edge/60">
-      <td class="py-1.5 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
-      <td class="py-1.5">${tfPill(x.tf)}</td>
-      <td class="py-1.5"><span class="pill ${x.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
-      <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}${x.tp1_hit ? " · TP1" : ""}${x.tp2_hit ? "·TP2" : ""}</td>
-      <td class="py-1.5 text-right tabular-nums text-slate-400">${usd(x.entry_mid)}</td>
-      <td class="py-1.5 text-right tabular-nums text-rose-300">${usd(x.stop)}</td>
-      <td class="py-1.5 text-right tabular-nums">${x.currentPrice != null ? usd(x.currentPrice) : "—"}</td>
-      <td class="py-1.5 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? x.openR + "R" : "—"}</td>
-    </tr>`).join("");
-  $("open-table").innerHTML = (t.open || []).length
-    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Status</th><th class="text-right">Entry</th><th class="text-right">Stop</th><th class="text-right">Price</th><th class="text-right">Open R</th></tr></thead><tbody>${openRows}</tbody>`
-    : '<tbody><tr><td class="py-3 text-slate-500">No open tracked signals yet. High-confidence setups are logged automatically.</td></tr></tbody>';
+// Directional % move between two prices.
+function movePct(from, to, long) { if (from == null || to == null || !from) return null; return round(((long ? to - from : from - to) / from) * 100, 2); }
+// Progress bar from entry toward TP1 (0..100%).
+function tp1Progress(x) {
+  const long = x.direction === "LONG";
+  if (x.currentPrice == null || x.entry_mid == null || x.tp1 == null) return 0;
+  const span = Math.abs(x.tp1 - x.entry_mid) || 1;
+  const done = long ? x.currentPrice - x.entry_mid : x.entry_mid - x.currentPrice;
+  return Math.max(0, Math.min(100, (done / span) * 100));
+}
 
-  const recRows = (t.recent || []).map((x) => `<tr class="border-b border-edge/60">
-      <td class="py-1.5 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
-      <td class="py-1.5">${tfPill(x.tf)}</td>
-      <td class="py-1.5"><span class="pill ${x.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
-      <td class="py-1.5 ${STATUS_CLS[x.status]}">${x.status}${x.tp3_hit ? " · TP3" : x.tp2_hit ? " · TP2" : x.tp1_hit ? " · TP1" : ""}</td>
-      <td class="py-1.5 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? x.result_r + "R" : "—"}</td>
-      <td class="py-1.5 text-right text-xs text-slate-500">${x.closed_at ? new Date(x.closed_at).toLocaleString() : ""}</td>
-    </tr>`).join("");
-  $("recent-table").innerHTML = (t.recent || []).length
-    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Result</th><th class="text-right">R</th><th class="text-right">Closed</th></tr></thead><tbody>${recRows}</tbody>`
-    : '<tbody><tr><td class="py-3 text-slate-500">No closed results yet — check back as signals resolve.</td></tr></tbody>';
+function renderTrackedFiltered() {
+  const open = trackFilter(lastTrack.open);
+  const recent = trackFilter(lastTrack.recent);
+
+  const openRows = open.map((x) => {
+    const long = x.direction === "LONG";
+    const gain = movePct(x.entry_mid, x.currentPrice, long);        // current gain %
+    const toTp1 = movePct(x.currentPrice, x.tp1, long);             // % still needed to TP1
+    const prog = tp1Progress(x);
+    return `<tr class="border-b border-edge/60">
+      <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
+      <td class="py-2">${tfPill(x.tf)}</td>
+      <td class="py-2"><span class="pill ${long ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
+      <td class="py-2 ${STATUS_CLS[x.status]}">${x.status}${x.tp1_hit ? " ·TP1" : ""}${x.tp2_hit ? "·TP2" : ""}</td>
+      <td class="py-2 text-right tabular-nums ${gain > 0 ? "text-emerald-400" : gain < 0 ? "text-rose-400" : "text-slate-400"}">${gain != null ? (gain > 0 ? "+" : "") + gain + "%" : "—"}</td>
+      <td class="py-2 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "—"}</td>
+      <td class="py-2" style="min-width:120px">
+        <div class="flex items-center gap-2">
+          <div class="h-1.5 flex-1 overflow-hidden rounded bg-slate-800"><div class="h-full bg-emerald-500" style="width:${prog}%"></div></div>
+          <span class="text-xs text-slate-400">${toTp1 != null ? (toTp1 > 0 ? toTp1 + "% to TP1" : "at TP1") : ""}</span>
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
+  $("open-table").innerHTML = open.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Status</th><th class="text-right">Gain</th><th class="text-right">Open R</th><th>Progress → TP1</th></tr></thead><tbody>${openRows}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No open tracked signals for this filter. High-confidence setups are logged automatically.</td></tr></tbody>';
+
+  const recRows = recent.map((x) => {
+    const long = x.direction === "LONG";
+    const riskPct = x.entry_mid && x.stop ? Math.abs(x.entry_mid - x.stop) / x.entry_mid * 100 : null;
+    const gainPct = x.result_r != null && riskPct != null ? round(x.result_r * riskPct, 2) : null;
+    return `<tr class="border-b border-edge/60">
+      <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
+      <td class="py-2">${tfPill(x.tf)}</td>
+      <td class="py-2"><span class="pill ${long ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
+      <td class="py-2 ${STATUS_CLS[x.status]}">${x.status}${x.tp3_hit ? " ·TP3" : x.tp2_hit ? " ·TP2" : x.tp1_hit ? " ·TP1" : ""}</td>
+      <td class="py-2 text-right tabular-nums ${gainPct > 0 ? "text-emerald-400" : gainPct < 0 ? "text-rose-400" : "text-slate-400"}">${gainPct != null ? (gainPct > 0 ? "+" : "") + gainPct + "%" : "—"}</td>
+      <td class="py-2 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? (x.result_r > 0 ? "+" : "") + x.result_r + "R" : "—"}</td>
+      <td class="py-2 text-right text-xs text-slate-500">${x.closed_at ? new Date(x.closed_at).toLocaleString() : ""}</td>
+    </tr>`;
+  }).join("");
+  $("recent-table").innerHTML = recent.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Result</th><th class="text-right">Gain</th><th class="text-right">R</th><th class="text-right">Closed</th></tr></thead><tbody>${recRows}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No closed results for this filter yet.</td></tr></tbody>';
 }
 
 async function loadTrack() {
@@ -133,7 +164,8 @@ async function loadTrack() {
     const [s, t] = await Promise.all([api("/api/stats"), api("/api/tracked")]);
     renderStats(s);
     renderByTf(s.byTimeframe);
-    renderTracked(t);
+    lastTrack = t;
+    renderTrackedFiltered();
   } catch (e) { /* ignore */ }
 }
 
@@ -190,12 +222,31 @@ async function openChart(sym, tfv) {
       `<span class="pill ${sig.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${sig.direction} ${sig.confidence}%</span>`,
       `<span class="pill bg-slate-800">Entry ${usd(sig.entry.low)}–${usd(sig.entry.high)}</span>`,
       `<span class="pill bg-slate-800 text-rose-300">Stop ${usd(sig.stop.priceUsd)} (-${sig.stop.riskPct}%)</span>`,
-      ...sig.targets.map((t) => `<span class="pill bg-slate-800 text-emerald-300">${t.name} ${usd(t.priceUsd)} ${t.etaLabel}</span>`),
+      ...sig.targets.map((t) => `<span class="pill bg-slate-800 text-emerald-300">${t.name} +${t.gainPct}% · ${usd(t.priceUsd)} · ${t.etaLabel}</span>`),
     ].join(" ");
   } else {
     $("chart-plan").innerHTML = '<span class="pill bg-slate-800 text-slate-400">No active setup — chart for reference.</span>';
   }
   c.timeScale().fitContent();
+  // Backtest button runs the rules over history for this coin+timeframe.
+  $("chart-bt").innerHTML = "";
+  $("chart-backtest").onclick = async () => {
+    $("chart-bt").innerHTML = '<span class="pill bg-slate-800 text-slate-400">Backtesting…</span>';
+    try {
+      const b = await api(`/api/backtest/${sym}?tf=${encodeURIComponent(tfv)}`);
+      if (b.error) { $("chart-bt").innerHTML = `<span class="pill bg-slate-800 text-slate-400">${b.error}</span>`; return; }
+      const wr = b.winRatePct;
+      $("chart-bt").innerHTML = [
+        `<span class="pill border border-edge bg-panel">Backtest ${b.bars} bars</span>`,
+        `<span class="pill bg-slate-800">Win <b class="${wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-sky-400" : "text-rose-400"}">${wr ?? "—"}%</b></span>`,
+        `<span class="pill bg-slate-800">Trades ${b.trades}</span>`,
+        `<span class="pill bg-slate-800 text-emerald-300">TP1 ${b.tp1RatePct ?? "—"}%</span>`,
+        `<span class="pill bg-slate-800 text-emerald-300">TP2 ${b.tp2RatePct ?? "—"}%</span>`,
+        `<span class="pill bg-slate-800 text-emerald-300">TP3 ${b.tp3RatePct ?? "—"}%</span>`,
+        `<span class="pill bg-slate-800">Avg <b class="${b.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${b.avgR ?? "—"}R</b></span>`,
+      ].join(" ");
+    } catch (e) { $("chart-bt").innerHTML = `<span class="pill bg-slate-800 text-rose-400">${e.message}</span>`; }
+  };
 }
 
 async function load() {
@@ -226,6 +277,12 @@ async function rescan() {
 }
 
 let activeTab = "signals";
+let trackTf = "all";
+let trackSearch = "";
+let lastTrack = { open: [], recent: [] };
+function drawTrackTf() {
+  seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["5m", "15m", "1h", "4h"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
+}
 function drawTabs() {
   const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
@@ -245,6 +302,8 @@ async function init() {
   seg($("tf-buttons"), (CONFIG.timeframes || ["5m", "15m", "1h", "4h"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
   seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
   $("search").oninput = (e) => { search = e.target.value.trim(); render(); };
+  drawTrackTf();
+  $("track-search").oninput = (e) => { trackSearch = e.target.value.trim().toUpperCase(); renderTrackedFiltered(); };
   $("btn-refresh").onclick = rescan;
   $("chart-close").onclick = closeChart;
   $("chart-modal").onclick = (e) => { if (e.target.id === "chart-modal") closeChart(); };

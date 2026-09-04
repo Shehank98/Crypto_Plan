@@ -275,7 +275,7 @@ function computeSignal(base, tf, d, fx) {
   const stop = long ? Math.min(swingLow, entryLow - a) : Math.max(swingHigh, entryHigh + a);
   const risk = Math.abs(entryMid - stop);
   const tfMin = TF_MINUTES[tf] || 60, perCandle = a * 0.6;
-  const targets = [1, 2, 3].map((k) => { const tp = long ? entryMid + k * risk : entryMid - k * risk; const candles = perCandle > 0 ? Math.abs(tp - entryMid) / perCandle : Infinity; return { name: `TP${k}`, priceUsd: round(tp, 6), priceLkr: round(tp * fx, 2), rr: k, etaLabel: humanizeEta(candles * tfMin) }; });
+  const targets = [1, 2, 3].map((k) => { const tp = long ? entryMid + k * risk : entryMid - k * risk; const candles = perCandle > 0 ? Math.abs(tp - entryMid) / perCandle : Infinity; return { name: `TP${k}`, priceUsd: round(tp, 6), priceLkr: round(tp * fx, 2), rr: k, gainPct: round((Math.abs(tp - entryMid) / entryMid) * 100, 2), etaLabel: humanizeEta(candles * tfMin) }; });
   const inZone = price >= entryLow && price <= entryHigh;
   const status = inZone ? "READY" : long ? "WAIT for pullback to entry" : "WAIT for bounce to entry";
   return { ...out, entry: { low: round(entryLow, 6), high: round(entryHigh, 6), mid: round(entryMid, 6), status, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: round(stop, 6), priceLkr: round(stop * fx, 2), riskPct: round((risk / entryMid) * 100, 2) }, targets, invalidation: long ? `Close below ${round(stop, 6)} invalidates the long.` : `Close above ${round(stop, 6)} invalidates the short.` };
@@ -284,6 +284,59 @@ function computeSignal(base, tf, d, fx) {
 async function signalFor(base, tf, fx) {
   try { const d = await getOHLCV(base, tf, 210); if (!d) return { base, symbol: base, tf, error: "no data" }; return computeSignal(base, tf, d, fx); }
   catch (e) { return { base, symbol: base, tf, error: e.message }; }
+}
+
+// Historical backtest: replay the exact signal rules over past candles and
+// simulate each trade forward using real intrabar highs/lows (pessimistic when
+// stop and target share a bar). Returns win rate / TP rates / avg R.
+async function backtest(base, tf, bars, preloaded) {
+  const d = preloaded || (await getOHLCV(base, tf, Math.min(1000, Math.max(300, bars || 1000))));
+  if (!d || d.closes.length < 220) return { symbol: base, tf, error: "not enough data" };
+  const { highs, lows, closes, volumes } = d;
+  const N = closes.length;
+  const trades = [];
+  let i = 200;
+  while (i < N - 2) {
+    const sig = computeSignal(base, tf, { highs: highs.slice(0, i + 1), lows: lows.slice(0, i + 1), closes: closes.slice(0, i + 1), volumes: volumes.slice(0, i + 1) }, 1);
+    if (sig.direction === "NEUTRAL" || !sig.entry) { i++; continue; }
+    const long = sig.direction === "LONG";
+    const eLow = sig.entry.low, eHigh = sig.entry.high, eMid = sig.entry.mid, stop = sig.stop.priceUsd;
+    const tp = sig.targets.map((t) => t.priceUsd);
+    let entered = false, enterBar = -1, tp1 = false, tp2 = false, outcome = null, j = i + 1;
+    for (; j < N; j++) {
+      const hi = highs[j], lo = lows[j];
+      if (!entered) {
+        if (long ? lo <= stop : hi >= stop) { outcome = { status: "EXPIRED", r: 0 }; break; }
+        if (long ? lo <= eHigh : hi >= eLow) { entered = true; enterBar = j; }
+        else if (j - i > MAX_WAIT_CANDLES) { outcome = { status: "EXPIRED", r: 0 }; break; }
+        if (!entered) continue;
+      }
+      const hitStop = long ? lo <= stop : hi >= stop;
+      if (hitStop && !tp1) { outcome = { status: "LOSS", r: -1 }; break; }
+      if (long ? hi >= tp[0] : lo <= tp[0]) tp1 = true;
+      if (long ? hi >= tp[1] : lo <= tp[1]) tp2 = true;
+      if (long ? hi >= tp[2] : lo <= tp[2]) { outcome = { status: "WIN", r: 3, tp1: true, tp2: true, tp3: true }; break; }
+      if (hitStop && tp1) { outcome = { status: "WIN", r: tp2 ? 2 : 1, tp1: true, tp2 }; break; }
+      if (j - enterBar > MAX_HOLD_CANDLES) { outcome = { status: tp1 ? "WIN" : "EXPIRED", r: tp1 ? (tp2 ? 2 : 1) : 0, tp1, tp2 }; break; }
+    }
+    if (!outcome) break; // ran out of data
+    trades.push({ dir: sig.direction, ...outcome, tp1: outcome.tp1 || tp1, tp2: outcome.tp2 || tp2 });
+    i = Math.max(i + 1, j + 1);
+  }
+  const entered = trades.filter((t) => t.status !== "EXPIRED" || t.r !== 0);
+  const wins = trades.filter((t) => t.status === "WIN").length;
+  const losses = trades.filter((t) => t.status === "LOSS").length;
+  const decided = wins + losses;
+  const rs = trades.map((t) => t.r).filter((x) => Number.isFinite(x));
+  const pct = (n, dn) => (dn ? round((n / dn) * 100, 1) : null);
+  return {
+    symbol: base, tf, bars: N, trades: trades.length, entered: entered.length, wins, losses,
+    winRatePct: pct(wins, decided),
+    tp1RatePct: pct(entered.filter((t) => t.tp1).length, entered.length),
+    tp2RatePct: pct(entered.filter((t) => t.tp2).length, entered.length),
+    tp3RatePct: pct(trades.filter((t) => t.status === "WIN" && t.r === 3).length, entered.length),
+    avgR: rs.length ? round(rs.reduce((a, b) => a + b, 0) / rs.length, 2) : null,
+  };
 }
 
 // Timeframes to scan + track. SIGNAL_TF always; any timeframe a user views is
@@ -498,6 +551,11 @@ app.get("/api/candles/:symbol", wrap(async (req, res) => {
 }));
 app.post("/api/rescan", wrap(async (req, res) => { const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF; delete scanCache[tf]; res.json(await scanMarket(tf)); }));
 
+app.get("/api/backtest/:symbol", wrap(async (req, res) => {
+  const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
+  res.json(await backtest(req.params.symbol.toUpperCase().replace(QUOTE, ""), tf, Number(req.query.bars) || 1000));
+}));
+
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
@@ -586,4 +644,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, computeSignal, humanizeEta, advance };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, computeSignal, humanizeEta, advance, backtest };

@@ -47,10 +47,14 @@
 
     <!-- TRACK RECORD TAB -->
     <div id="tab-track" class="hidden">
-      <div id="stats" class="mb-4 flex flex-wrap gap-2"></div>
-      <p class="mb-4 text-xs text-slate-500">
-        Every high-confidence signal is logged and checked live until it reaches a target or stop.
-        <span id="track-note"></span>
+      <div id="stats" class="mb-3 flex flex-wrap gap-2"></div>
+      <div class="mb-3 flex flex-wrap items-center gap-3">
+        <div id="track-tf" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
+        <input id="track-search" placeholder="Search coin… e.g. BTC" class="w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
+      </div>
+      <p class="mb-4 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
+        <b class="text-slate-300">Open R</b> = current profit in units of risk (1R = your entry→stop distance). +1R means up by the amount you risked.
+        Every signal is logged and checked live until it hits a target or stop. <span id="track-note"></span>
       </p>
       <div class="mb-4 card p-4">
         <h3 class="mb-2 text-sm font-semibold text-slate-300">Win rate by timeframe</h3>
@@ -78,9 +82,11 @@
         <h3 id="chart-title" class="text-lg font-bold text-white"></h3>
         <div class="flex items-center gap-2">
           <span id="chart-legend" class="hidden text-xs text-slate-400 sm:inline"></span>
+          <button id="chart-backtest" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm hover:bg-edge">⏮ Backtest</button>
           <button id="chart-close" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm hover:bg-edge">✕ Close</button>
         </div>
       </div>
+      <div id="chart-bt" class="mb-2 flex flex-wrap gap-2 text-xs"></div>
       <div id="chart-plan" class="mb-2 flex flex-wrap gap-2 text-xs"></div>
       <div id="chart" class="w-full" style="height:440px"></div>
     </div>
