@@ -579,7 +579,7 @@ async function openAnalysis(sym, tfv) {
     <h4 class="mb-1 text-sm font-semibold text-slate-300">🎯 Exit plan (scale out - lock profit early)</h4>
     <div class="mb-4 rounded-lg border border-edge bg-ink/50 p-3 text-xs">
       ${s.exitPlan.map((p) => `<div class="flex gap-2 border-b border-edge/40 py-1 last:border-0"><b class="w-10 text-emerald-300">${p.at}</b><b class="w-20 text-slate-200">${p.action}</b><span class="text-slate-400">${p.note}</span></div>`).join("")}
-      <p class="mt-2 text-[11px] text-slate-500">Once TP1 hits and the stop is at break-even, the trade <b class="text-emerald-300">can't lose</b> - worst case is a scratch, best case a full ~+1.75R.</p>
+      <p class="mt-2 text-[11px] text-slate-500">${s.exitPlan.length > 2 ? "Once TP1 hits and the stop is at break-even, the trade <b class='text-emerald-300'>can't lose</b> - best case a full ~+1.75R." : "Banking the full <b class='text-emerald-300'>+1R at TP1</b> is the highest-probability exit for these setups - don't wait for TP2/TP3."}</p>
     </div>` : "";
   const fibBlock = s.fib ? `
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Fibonacci (swing ${usd(s.fib.swingLow)} - ${usd(s.fib.swingHigh)})</h4>
@@ -698,6 +698,7 @@ async function loadSettings() {
     $("set-quality").checked = !!s.qualityOnly;
     $("set-hold").checked = !!s.holdThroughDips;
     $("set-regime").checked = !!s.regimeFilter;
+    if (s.exitStyle) $("set-exit").value = s.exitStyle;
     $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
     $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
     let note = "";
@@ -726,7 +727,7 @@ async function loadTestnetTrades() {
     : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
 }
 async function saveSettings() {
-  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked, regimeFilter: $("set-regime").checked };
+  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked, regimeFilter: $("set-regime").checked, exitStyle: $("set-exit").value };
   const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
   if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";

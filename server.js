@@ -410,12 +410,18 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   if (opts.htfDir && opts.htfDir !== direction && opts.htfDir !== "NEUTRAL") discipline.push(`Higher timeframe (${opts.htf}) disagrees - reduce size or skip; trade with the bigger trend.`);
 
   const rr = { toTp1: `${targets[0].rr}:1`, toTp2: `${targets[1].rr}:1`, toTp3: `${targets[2].rr}:1`, riskPct };
-  // Scale-out exit plan: bank profit early, then it can't lose (break-even stop).
-  const exitPlan = [
-    { at: "TP1", action: "Sell 50%", note: "Move stop to break-even - the trade is now risk-free." },
-    { at: "TP2", action: "Sell 25%", note: "Trail the stop up to TP1 to lock more in." },
-    { at: "TP3", action: "Sell last 25%", note: "Full run banks about +1.75R blended." },
-  ];
+  // Exit plan depends on the chosen style. Default (tp1) banks the full +1R at
+  // the first target - best when TP1 is where the edge is.
+  const exitPlan = settings.exitStyle === "scaleout"
+    ? [
+        { at: "TP1", action: "Sell 50%", note: "Move stop to break-even - the trade is now risk-free." },
+        { at: "TP2", action: "Sell 25%", note: "Trail the stop up to TP1 to lock more in." },
+        { at: "TP3", action: "Sell last 25%", note: "Full run banks about +1.75R blended." },
+      ]
+    : [
+        { at: "TP1", action: "Take full profit", note: "Bank the whole +1R here - TP1 is the reliable edge; don't wait for TP2/TP3." },
+        { at: "Stop", action: "Cut the trade", note: `Exit at ${rp(stop)} if price goes the other way first (-1R).` },
+      ];
   return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, window, rrNow, enterMsg, inGolden, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, rr, exitPlan, fib, discipline, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
 }
 
@@ -459,6 +465,13 @@ async function backtest(base, tf, bars, preloaded) {
         if (long ? lo <= eHigh : hi >= eLow) { entered = true; enterBar = j; }
         else if (j - i > MAX_WAIT_CANDLES) { outcome = { status: "EXPIRED", r: 0 }; break; }
         if (!entered) continue;
+      }
+      // Full take-profit at TP1 (default): stop first (pessimistic), else TP1 = +1R.
+      if (settings.exitStyle === "tp1") {
+        if (long ? lo <= stop : hi >= stop) { outcome = { status: "LOSS", r: -1 }; break; }
+        if (long ? hi >= tp[0] : lo <= tp[0]) { outcome = { status: "WIN", r: 1, tp1: true }; break; }
+        if (j - enterBar > MAX_HOLD_CANDLES) { outcome = { status: "EXPIRED", r: 0 }; break; }
+        continue;
       }
       // Scale-out: stop trails to break-even after TP1, to TP1 after TP2 (check
       // pessimistically against the level set by already-confirmed TPs).
@@ -658,6 +671,18 @@ function advance(t, P, now) {
   if (t.status === "ACTIVE") {
     const upd = {}; const nowD = new Date();
     if (!t.tp1_hit && reach(t.tp1)) { upd.tp1_hit = true; upd.tp1_at = nowD; }
+    // Full take-profit at TP1 (default): TP1 is usually the peak for these setups,
+    // so banking the whole +1R there beats holding for a TP2/TP3 that rarely comes.
+    if (settings.exitStyle === "tp1") {
+      if (t.tp1_hit || upd.tp1_hit) return { ...upd, status: "WIN", result_r: 1, closed_at: nowD };
+      if (belowStop) return { status: "LOSS", result_r: -1, closed_at: nowD };
+      const eMs0 = t.entered_at ? new Date(t.entered_at).getTime() : created;
+      if ((now - eMs0) / 60000 > MAX_HOLD_CANDLES * tfMin) {
+        const openR = round((long ? P - t.entry_mid : t.entry_mid - P) / Math.abs(t.entry_mid - t.stop), 2);
+        return { status: "EXPIRED", result_r: openR, closed_at: nowD };
+      }
+      return Object.keys(upd).length ? upd : null;
+    }
     if (!t.tp2_hit && reach(t.tp2)) { upd.tp2_hit = true; upd.tp2_at = nowD; }
     const t1 = t.tp1_hit || upd.tp1_hit, t2 = t.tp2_hit || upd.tp2_hit;
     // Scale-out: 50% at TP1, 25% at TP2, 25% at TP3 -> full run = +1.75R.
@@ -721,6 +746,8 @@ async function trackedIndex() {
 async function openFrom(data) {
   for (const s of data.signals) {
     if ((s.direction === "LONG" || s.direction === "SHORT") && s.confidence >= TRACK_MIN_CONFIDENCE && s.entry && s.targets) {
+      // Skip illiquid junk (tokenized stocks, micro-caps) - they produce the ugly outlier losses.
+      if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
       await store.open(s).catch((e) => console.warn("[track]", e.message));
       await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
     }
@@ -791,6 +818,8 @@ const settings = {
   qualityOnly: !/^(0|false|no|off)$/i.test(process.env.QUALITY_ONLY || "true"), // only trade blue-chip/solid coins
   holdThroughDips: /^(1|true|yes|on)$/i.test(process.env.HOLD_THROUGH_DIPS || ""), // no stop: hold a sideways spot until TP1
   regimeFilter: !/^(0|false|no|off)$/i.test(process.env.REGIME_FILTER || "true"), // don't auto-buy when the market is risk-off
+  exitStyle: (process.env.EXIT_STYLE || "tp1").toLowerCase() === "scaleout" ? "scaleout" : "tp1", // tp1 = full profit at TP1 (best when TP1 is the edge); scaleout = ride to TP3
+  minTrackLiquidityUsd: Number(process.env.MIN_TRACK_LIQUIDITY_USD || 15e6), // ignore illiquid junk (tokenized stocks, micro-caps)
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -991,7 +1020,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1001,6 +1030,8 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.qualityOnly === "boolean") settings.qualityOnly = b.qualityOnly;
   if (typeof b.holdThroughDips === "boolean") settings.holdThroughDips = b.holdThroughDips;
   if (typeof b.regimeFilter === "boolean") settings.regimeFilter = b.regimeFilter;
+  if (b.exitStyle === "tp1" || b.exitStyle === "scaleout") settings.exitStyle = b.exitStyle;
+  if (b.minTrackLiquidityUsd != null && Number.isFinite(+b.minTrackLiquidityUsd)) settings.minTrackLiquidityUsd = Math.max(0, +b.minTrackLiquidityUsd);
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
   if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
   if (typeof b.proxyUrl === "string") settings.proxyUrl = b.proxyUrl.trim();

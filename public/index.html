@@ -57,6 +57,7 @@
       <p class="mb-4 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
         <b class="text-slate-300">Open R</b> = current profit in units of risk (1R = your entry→stop distance). +1R means up by the amount you risked.
         Every signal is logged and checked live until it hits a target or stop. Tables show the <b class="text-slate-300">entry price</b>, when it was logged/entered in <b class="text-slate-300">Sri Lanka time</b>, the <b class="text-slate-300">estimated time to TP1</b>, and - once closed - the <b class="text-slate-300">estimated vs actual</b> time it took. <span id="track-note"></span>
+        <br><b class="text-amber-300">Note:</b> a signal's "95%" is a <b class="text-slate-300">confidence</b> score (how well the setup lines up), <b>not</b> a 95% win probability. Your real edge is the <b class="text-slate-300">Win rate</b> and <b class="text-slate-300">Avg R</b> above.
       </p>
       <div id="eta-panel" class="mb-4 hidden card p-4 text-xs"></div>
       <div class="mb-4 card p-4">
@@ -94,6 +95,13 @@
             <label class="flex items-center gap-2 text-sm text-slate-300"><input id="set-quality" type="checkbox" class="h-4 w-4" /> Only trade <b>high-quality</b> coins (Blue-chip / Solid) - like BTC / ETH</label>
             <label class="flex items-center gap-2 text-sm text-slate-300"><input id="set-hold" type="checkbox" class="h-4 w-4" /> <b>Hold through dips</b> - no stop, ride a sideways spot until TP1</label>
             <label class="flex items-center gap-2 text-sm text-slate-300"><input id="set-regime" type="checkbox" class="h-4 w-4" /> <b>Respect market regime</b> - pause auto-buys when BTC / breadth is risk-off</label>
+          </div>
+          <div class="mb-3 flex items-center gap-2 text-sm text-slate-300">
+            <label>Exit style</label>
+            <select id="set-exit" class="rounded-lg border border-edge bg-ink px-2 py-1.5 text-sm outline-none focus:border-indigo-500">
+              <option value="tp1">Full profit at TP1 (recommended)</option>
+              <option value="scaleout">Scale out 50/25/25 (ride to TP3)</option>
+            </select>
           </div>
           <div class="flex flex-wrap gap-2">
             <button id="set-save" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
