@@ -40,7 +40,7 @@ const WIN = {
 function entryWindowBadge(e) {
   if (!e) return "";
   const w = WIN[e.window] || { cls: "bg-slate-800 text-slate-300", label: e.status || "" };
-  return `<span class="pill ${w.cls}">${w.label}${e.rrNow != null ? ` · R:R ${e.rrNow}:1` : ""}</span>`;
+  return `<span class="pill ${w.cls}">${w.label}</span>`;
 }
 
 // Coin quality (BTC/ETH-like stability): liquidity + volatility.
@@ -556,7 +556,7 @@ async function openAnalysis(sym, tfv) {
     <div class="mb-4 rounded-lg border border-edge bg-ink/50 p-3">
       <div class="mb-1 flex flex-wrap items-center gap-2">${entryWindowBadge(e)}${e.inGolden ? '<span class="pill bg-indigo-900/60 text-indigo-200">🎯 Fib golden pocket</span>' : ""}</div>
       <p class="text-xs ${e.window === "CLOSED" ? "text-rose-300" : e.window === "OPEN" ? "text-emerald-300" : "text-slate-400"}">${e.enterMsg || ""}</p>
-      ${s.rr ? `<div class="mt-2 flex flex-wrap gap-2 text-xs"><span class="pill bg-slate-800">Risk ${s.rr.riskPct}%</span><span class="pill bg-slate-800 text-emerald-300">R:R to TP1 ${s.rr.toTp1}</span><span class="pill bg-slate-800 text-emerald-300">TP2 ${s.rr.toTp2}</span><span class="pill bg-slate-800 text-emerald-300">TP3 ${s.rr.toTp3}</span>${e.rrNow != null ? `<span class="pill ${e.rrNow >= 2 ? "bg-emerald-900 text-emerald-200" : e.rrNow >= 1 ? "bg-amber-900 text-amber-200" : "bg-rose-900 text-rose-200"}">R:R from price now ${e.rrNow}:1</span>` : ""}</div>` : ""}
+      ${s.rr ? `<div class="mt-2 flex flex-wrap gap-2 text-xs"><span class="pill bg-slate-800">Risk ${s.rr.riskPct}% to stop</span><span class="pill bg-slate-800 text-emerald-300">Plan R:R - TP1 ${s.rr.toTp1}</span><span class="pill bg-slate-800 text-emerald-300">TP2 ${s.rr.toTp2}</span><span class="pill bg-slate-800 text-emerald-300">TP3 ${s.rr.toTp3}</span></div>${e.rrNow != null && (e.window === "CHASE" || e.window === "CLOSED") ? `<p class="mt-1 text-[11px] text-amber-400">Buying at market right now is only ${e.rrNow}:1 - wait for a pullback toward ${usd(e.mid)} to get the full plan R:R.</p>` : `<p class="mt-1 text-[11px] text-slate-500">Best entry is a limit near ${usd(e.mid)} (the pullback), which gives the full 1:1 / 2:1 / 3:1.</p>`}` : ""}
     </div>` : "";
   // Fibonacci levels
   const fibBlock = s.fib ? `

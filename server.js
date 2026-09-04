@@ -370,19 +370,20 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   const targetsWhy = `TP1/TP2/TP3 sit at 1×/2×/3× the ${riskPct}% risked to the stop (R-multiples). ETAs are projected from recent ATR speed (~${rp(perCandle)}/candle).`;
 
   // --- Entry timing / window: is it still worth entering from HERE? ---
-  // Live risk:reward from the current price to TP1. As price runs past the entry
-  // zone, reward shrinks and risk grows, so R:R collapses -> the window closes.
+  // The entry is a LIMIT at the pullback mid (entryMid), so plan R:R to TP1/2/3 is
+  // 1:1 / 2:1 / 3:1 by construction. rrNow is only the "buy at market right now"
+  // R:R (worse near the top of the zone) - shown for context, never to gate.
   const rewardNow = long ? targets[0].priceUsd - price : price - targets[0].priceUsd;
   const riskNow = long ? price - stop : stop - price;
   const rrNow = riskNow > 0 ? round(rewardNow / riskNow, 2) : null;
   const pastTp1 = long ? price >= targets[0].priceUsd : price <= targets[0].priceUsd;
-  const beyondZone = long ? price > entryHigh : price < entryLow;     // already moved off the pullback
-  const belowZone = long ? price < entryLow : price > entryHigh;      // still pulling back (good)
+  const beyondZone = long ? price > entryHigh : price < entryLow;     // ran ABOVE the pullback zone
+  const belowZone = long ? price < entryLow : price > entryHigh;      // still deep in the pullback
   let window, enterMsg;
-  if (pastTp1 || (rrNow != null && rrNow < 1)) { window = "CLOSED"; enterMsg = "Entry window closed - price already ran, risk:reward is poor now. Wait for the next setup."; }
-  else if (inZone) { window = "OPEN"; enterMsg = "Enter now - price is in the entry zone."; }
-  else if (belowZone) { window = "WAIT"; enterMsg = long ? "Wait - price is below the zone; let it base and reclaim, or buy the dip only with a plan." : "Wait - price is above the zone; let it stall before shorting."; }
-  else if (beyondZone) { window = rrNow != null && rrNow >= 1.5 ? "CHASE" : "CLOSED"; enterMsg = rrNow != null && rrNow >= 1.5 ? "Slightly extended - only enter on a small pullback; don't chase the candle." : "Missed the ideal entry - chasing here gives poor risk:reward. Wait for the next pullback."; }
+  if (pastTp1) { window = "CLOSED"; enterMsg = "Price already reached TP1 - too late to enter, wait for the next setup."; }
+  else if (inZone) { window = "OPEN"; enterMsg = long ? `In the buy zone. Set a limit near ${rp(entryMid)} (buy the pullback) for the best price; entering right at market is the top of the zone.` : `In the sell zone. Set a limit near ${rp(entryMid)} on the bounce.`; }
+  else if (belowZone) { window = "OPEN"; enterMsg = long ? `Price dipped into the lower zone (near/under ${rp(entryLow)}) - a strong pullback entry as long as the ${rp(stop)} stop holds.` : `Price popped into the upper zone - a strong short entry while ${rp(stop)} holds.`; }
+  else if (beyondZone) { window = rrNow != null && rrNow >= 1.2 ? "CHASE" : "CLOSED"; enterMsg = window === "CHASE" ? "Price is just above the zone - only enter on a small pullback, don't chase the candle." : "Price ran above the entry zone - chasing here is poor risk:reward. Wait for a pullback or the next setup."; }
   else { window = "WAIT"; enterMsg = "Wait for price to reach the entry zone."; }
 
   // --- Fibonacci retracement (pullback) + extension (targets) from the swing ---
