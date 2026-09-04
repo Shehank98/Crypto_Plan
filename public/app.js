@@ -12,6 +12,7 @@ let search = "";
 let last = { signals: [] };
 
 const $ = (id) => document.getElementById(id);
+const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
 const usd = (n) => (Number.isFinite(n) ? "$" + n.toLocaleString("en-US", { maximumFractionDigits: n < 1 ? 6 : n < 100 ? 4 : 2 }) : "—");
 const coinColor = (s) => COLORS[s] || "#818cf8";
 
