@@ -46,6 +46,11 @@ const LEVERAGED = /(UP|DOWN|BULL|BEAR|[0-9]+L|[0-9]+S)$/;
 
 const http = axios.create({ timeout: 12000, headers: { "User-Agent": "signal-engine/3.0" } });
 const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
+// Price rounding by SIGNIFICANT figures, not fixed decimals — otherwise sub-cent
+// coins (PEPE ~0.0000012, SHIB, BONK…) collapse to the same value at 6 decimals,
+// making entry/stop/targets identical (risk 0) so the trade never fills and always
+// EXPIRES. 8 sig figs keeps precision across both huge and tiny prices.
+const rp = (n) => (Number.isFinite(n) ? Number(n.toPrecision(8)) : null);
 
 // ===========================================================================
 // Indicators
@@ -259,11 +264,11 @@ function computeSignal(base, tf, d, fx) {
   }
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
 
-  const indicators = { price: round(price, 6), rsi14: round(r, 1), macdHist: mac ? round(mac.hist, 6) : null, bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: round(vw, 6), mfi: round(mf, 1), atr: round(a, 6), adx: round(adxV, 1), stochRsi: round(srsi, 2), ema20: round(ema20, 6), ema50: round(ema50, 6), ema200: round(ema200, 6) };
+  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), adx: round(adxV, 1), stochRsi: round(srsi, 2), ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200) };
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
-  const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: round(predicted, 6), lowUsd: round(predicted * (1 - bandFrac), 6), highUsd: round(predicted * (1 + bandFrac), 6) };
+  const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
-  const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: round(price, 6), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, generatedAt: new Date().toISOString() };
+  const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: rp(price), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, generatedAt: new Date().toISOString() };
   if (direction === "NEUTRAL" || !a) return { ...out, note: "No trend / setup — stand aside." };
 
   const long = direction === "LONG";
@@ -275,19 +280,19 @@ function computeSignal(base, tf, d, fx) {
   const stop = long ? Math.min(swingLow, entryLow - a) : Math.max(swingHigh, entryHigh + a);
   const risk = Math.abs(entryMid - stop);
   const tfMin = TF_MINUTES[tf] || 60, perCandle = a * 0.6;
-  const targets = [1, 2, 3].map((k) => { const tp = long ? entryMid + k * risk : entryMid - k * risk; const candles = perCandle > 0 ? Math.abs(tp - entryMid) / perCandle : Infinity; const etaMin = Number.isFinite(candles) ? Math.round(candles * tfMin) : null; return { name: `TP${k}`, priceUsd: round(tp, 6), priceLkr: round(tp * fx, 2), rr: k, gainPct: round((Math.abs(tp - entryMid) / entryMid) * 100, 2), etaMin, etaLabel: humanizeEta(candles * tfMin) }; });
+  const targets = [1, 2, 3].map((k) => { const tp = long ? entryMid + k * risk : entryMid - k * risk; const candles = perCandle > 0 ? Math.abs(tp - entryMid) / perCandle : Infinity; const etaMin = Number.isFinite(candles) ? Math.round(candles * tfMin) : null; return { name: `TP${k}`, priceUsd: rp(tp), priceLkr: round(tp * fx, 2), rr: k, gainPct: round((Math.abs(tp - entryMid) / entryMid) * 100, 2), etaMin, etaLabel: humanizeEta(candles * tfMin) }; });
   const inZone = price >= entryLow && price <= entryHigh;
   const status = inZone ? "READY" : long ? "WAIT for pullback to entry" : "WAIT for bounce to entry";
   // Plain-English rationale for each drawn level (shown on the chart's "why" panel).
   const riskPct = round((risk / entryMid) * 100, 2);
   const entryWhy = long
-    ? `Buy the pullback into the EMA20/VWAP zone (${round(entryLow, 6)}–${round(entryHigh, 6)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer — a tighter, higher-reward entry.`
-    : `Sell the bounce into the EMA20/VWAP zone (${round(entryLow, 6)}–${round(entryHigh, 6)}) instead of shorting the low. The trend is down, so a pop gives a better price with the stop closer.`;
+    ? `Buy the pullback into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer — a tighter, higher-reward entry.`
+    : `Sell the bounce into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of shorting the low. The trend is down, so a pop gives a better price with the stop closer.`;
   const stopWhy = long
-    ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${round(a, 6)}). A close under here breaks the higher-low structure — the uptrend idea is wrong, so exit.`
-    : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${round(a, 6)}). A close over here breaks the lower-high structure — the downtrend idea is wrong, so exit.`;
-  const targetsWhy = `TP1/TP2/TP3 sit at 1×/2×/3× the ${riskPct}% risked to the stop (R-multiples). ETAs are projected from recent ATR speed (~${round(perCandle, 6)}/candle).`;
-  return { ...out, entry: { low: round(entryLow, 6), high: round(entryHigh, 6), mid: round(entryMid, 6), status, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: round(stop, 6), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, invalidation: long ? `Close below ${round(stop, 6)} invalidates the long.` : `Close above ${round(stop, 6)} invalidates the short.` };
+    ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${rp(a)}). A close under here breaks the higher-low structure — the uptrend idea is wrong, so exit.`
+    : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${rp(a)}). A close over here breaks the lower-high structure — the downtrend idea is wrong, so exit.`;
+  const targetsWhy = `TP1/TP2/TP3 sit at 1×/2×/3× the ${riskPct}% risked to the stop (R-multiples). ETAs are projected from recent ATR speed (~${rp(perCandle)}/candle).`;
+  return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
 }
 
 async function signalFor(base, tf, fx) {

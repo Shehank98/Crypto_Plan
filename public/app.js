@@ -14,7 +14,8 @@ const btCache = {}; // per-card backtest results, keyed by SYMBOL|tf, so the 5s 
 
 const $ = (id) => document.getElementById(id);
 const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
-const usd = (n) => (Number.isFinite(n) ? "$" + n.toLocaleString("en-US", { maximumFractionDigits: n < 1 ? 6 : n < 100 ? 4 : 2 }) : "—");
+// Precision-aware price display: sub-cent coins (PEPE, SHIB…) need more decimals.
+const usd = (n) => { if (!Number.isFinite(n)) return "—"; const a = Math.abs(n); const d = a >= 100 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 6 : a >= 0.0001 ? 8 : 10; return "$" + n.toLocaleString("en-US", { maximumFractionDigits: d }); };
 const coinColor = (s) => COLORS[s] || "#818cf8";
 
 async function api(p) {
