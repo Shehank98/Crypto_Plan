@@ -593,15 +593,72 @@ function drawTrackTf() {
   seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
-  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }];
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "settings", label: "⚙️ Settings" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
   $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     activeTab = b.dataset.tab;
     $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
     $("tab-track").classList.toggle("hidden", activeTab !== "track");
+    $("tab-settings").classList.toggle("hidden", activeTab !== "settings");
     drawTabs();
     if (activeTab === "track") loadTrack();
+    if (activeTab === "settings") loadSettings();
   }));
+}
+
+// ---------- Settings / testnet trading ----------
+async function loadSettings() {
+  try {
+    const s = await api("/api/settings");
+    $("set-thr").textContent = `≥${s.trackMinConfidence}%`;
+    $("set-usd2").textContent = s.tradeUsd;
+    $("set-usd").value = s.tradeUsd;
+    $("set-auto").checked = !!s.autoTrade;
+    $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
+    if (!s.durableSettings) $("set-status").innerHTML = '<span class="text-amber-400">Note: no database — keys reset on redeploy. Set DATABASE_URL to persist.</span>';
+  } catch (e) { /* ignore */ }
+  loadTestnetTrades();
+}
+async function loadTestnetTrades() {
+  let t;
+  try { t = await api("/api/testnet/trades"); } catch (e) { return; }
+  const chip = (l, v, cls) => `<span class="pill border border-edge bg-panel px-3 py-1.5 text-slate-300">${l} <b class="${cls || "text-white"}">${v}</b></span>`;
+  $("tn-summary").innerHTML = [
+    chip("Auto-trade", t.autoTrade ? "ON" : "off", t.autoTrade ? "text-emerald-400" : "text-slate-400"),
+    chip("Total PnL", "$" + (t.totalPnlUsd ?? 0), t.totalPnlUsd > 0 ? "text-emerald-400" : t.totalPnlUsd < 0 ? "text-rose-400" : ""),
+    chip("Closed", t.closed),
+    chip("Win/Loss", `${t.wins}/${t.losses}`),
+    chip("Open", t.open.length),
+  ].join(" ");
+  $("tn-open").innerHTML = t.open.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th class="text-right">Qty</th><th class="text-right">Entry</th><th class="text-right">TP1</th><th class="text-right">Stop</th><th>Opened (SL)</th></tr></thead><tbody>${t.open.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 text-right tabular-nums">${x.qty}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums text-emerald-300">${usd(x.tp1)}</td><td class="py-1.5 text-right tabular-nums text-rose-300">${usd(x.stop)}</td><td class="py-1.5 text-xs text-slate-400">${slTime(x.opened_at)}</td></tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No open positions. A ≥95% LONG signal opens one automatically when auto-trade is on.</td></tr></tbody>';
+  $("tn-recent").innerHTML = t.recent.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th class="text-right">Entry</th><th class="text-right">Exit</th><th>Reason</th><th class="text-right">PnL $</th><th class="text-right">PnL %</th><th>Closed (SL)</th></tr></thead><tbody>${t.recent.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${usd(x.exit_price)}</td><td class="py-1.5 text-xs ${x.exit_reason === "TP1" ? "text-emerald-400" : "text-rose-400"}">${x.exit_reason}</td><td class="py-1.5 text-right tabular-nums ${x.pnl_usd > 0 ? "text-emerald-400" : x.pnl_usd < 0 ? "text-rose-400" : "text-slate-400"}">${x.pnl_usd > 0 ? "+" : ""}${x.pnl_usd}</td><td class="py-1.5 text-right tabular-nums ${x.pnl_pct > 0 ? "text-emerald-400" : "text-rose-400"}">${x.pnl_pct > 0 ? "+" : ""}${x.pnl_pct}%</td><td class="py-1.5 text-xs text-slate-500">${slTime(x.closed_at)}</td></tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
+}
+async function saveSettings() {
+  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100 };
+  const k = $("set-key").value.trim(), sec = $("set-secret").value.trim();
+  if (k) body.apiKey = k; if (sec) body.apiSecret = sec;
+  $("set-status").textContent = "Saving…";
+  try { await api2("/api/settings", body); $("set-key").value = ""; $("set-secret").value = ""; $("set-status").innerHTML = '<span class="text-emerald-400">✓ Saved.</span>'; loadSettings(); }
+  catch (e) { $("set-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function testConnection() {
+  $("set-status").textContent = "Testing…";
+  try { const r = await api2("/api/settings/test", {}); $("set-status").innerHTML = r.ok ? `<span class="text-emerald-400">✓ Connected. Tradeable ${r.usdtFree} USDT on testnet.</span>` : `<span class="text-rose-400">${r.error}</span>`; }
+  catch (e) { $("set-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function clearKeys() {
+  try { await api2("/api/settings", { clearKeys: true }); $("set-status").innerHTML = '<span class="text-amber-400">Keys cleared.</span>'; loadSettings(); } catch (e) { /* ignore */ }
+}
+// POST helper
+async function api2(p, body) {
+  const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const b = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+  return b;
 }
 
 async function init() {
@@ -620,6 +677,10 @@ async function init() {
   $("analysis-modal").onclick = (e) => { if (e.target.id === "analysis-modal") closeAnalysis(); };
   $("trade-close").onclick = () => { const m = $("trade-modal"); m.classList.add("hidden"); m.classList.remove("flex"); };
   $("trade-modal").onclick = (e) => { if (e.target.id === "trade-modal") { const m = $("trade-modal"); m.classList.add("hidden"); m.classList.remove("flex"); } };
+  $("set-save").onclick = saveSettings;
+  $("set-test").onclick = testConnection;
+  $("set-clear").onclick = clearKeys;
+  setInterval(() => { if (activeTab === "settings") loadTestnetTrades(); }, 15000); // refresh testnet PnL
   await load();
   const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live signals auto-refresh
   setInterval(load, ms);

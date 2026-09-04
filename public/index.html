@@ -72,6 +72,40 @@
       </div>
     </div>
 
+    <!-- SETTINGS TAB -->
+    <div id="tab-settings" class="hidden">
+      <div class="grid gap-4 md:grid-cols-2">
+        <div class="card p-4">
+          <h3 class="mb-1 text-sm font-semibold text-slate-300">🔌 Binance Spot Testnet</h3>
+          <p class="mb-3 text-xs text-slate-500">Paper trading with <b>demo money</b> on <code>testnet.binance.vision</code>. When a signal scores <b id="set-thr">≥95%</b> and is <b>LONG</b> (spot can only buy), the app buys <b>$<span id="set-usd2">100</span></b> and closes at <b>TP1</b> (or the stop). Use <b>Testnet keys only</b> — never your real API keys.</p>
+          <label class="mb-1 block text-xs text-slate-400">API Key</label>
+          <input id="set-key" placeholder="Testnet API key" class="mb-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" />
+          <label class="mb-1 block text-xs text-slate-400">Secret Key</label>
+          <input id="set-secret" type="password" placeholder="Testnet secret (write-only)" class="mb-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" />
+          <div class="mb-3 flex items-center gap-3">
+            <label class="text-xs text-slate-400">$ per trade</label>
+            <input id="set-usd" type="number" min="10" step="10" value="100" class="w-24 rounded-lg border border-edge bg-ink px-2 py-1.5 text-sm outline-none focus:border-indigo-500" />
+            <label class="ml-2 flex items-center gap-2 text-sm text-slate-300"><input id="set-auto" type="checkbox" class="h-4 w-4" /> Auto-trade</label>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button id="set-save" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
+            <button id="set-test" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">Test connection</button>
+            <button id="set-clear" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-rose-300 hover:bg-edge">Clear keys</button>
+          </div>
+          <p id="set-status" class="mt-3 text-xs"></p>
+          <p class="mt-2 text-[11px] text-slate-500">Get keys at <span class="text-slate-400">testnet.binance.vision</span> → Generate HMAC_SHA256 key. Keys are stored on your server and never shown back here.</p>
+        </div>
+        <div class="card p-4">
+          <h3 class="mb-2 text-sm font-semibold text-slate-300">💵 Testnet performance</h3>
+          <div id="tn-summary" class="mb-3 flex flex-wrap gap-2"></div>
+          <h4 class="mb-1 text-xs font-semibold uppercase text-slate-500">Open positions</h4>
+          <div class="mb-3 overflow-x-auto"><table class="w-full text-sm" id="tn-open"></table></div>
+          <h4 class="mb-1 text-xs font-semibold uppercase text-slate-500">Closed trades (realized PnL)</h4>
+          <div class="overflow-x-auto"><table class="w-full text-sm" id="tn-recent"></table></div>
+        </div>
+      </div>
+    </div>
+
     <p class="mt-8 text-center text-xs text-slate-500">
       Data: Binance (USDT spot). Trend-following signals are educational, not financial advice — always use your own stop.
     </p>

@@ -102,6 +102,25 @@ time is left** to the next target. So you know exactly how long to wait for each
 - A signal is a **WIN** if it reaches ≥ TP1 before the stop, **LOSS** if stopped first,
   **EXPIRED** if entry never fills or it times out (`MAX_WAIT_CANDLES` / `MAX_HOLD_CANDLES`).
 
+## Auto-trade on Binance Spot **Testnet** (paper money)
+
+A **Settings** tab lets you paper-trade the high-conviction signals on Binance's spot
+**testnet** (`testnet.binance.vision`) — demo funds only, zero real risk:
+
+1. Create a testnet account and **Generate HMAC_SHA256 key** at `testnet.binance.vision`.
+2. Open the app → **⚙️ Settings** → paste the **API key + secret**, set **$ per trade**
+   (default 100), tick **Auto-trade**, **Save**, then **Test connection**.
+3. Now whenever a signal scores **≥ 95%** and is **LONG** (spot can only buy), the app
+   **market-buys ~$100** of that coin and **closes at TP1** (take profit) or the stop
+   (safety). Each closed trade shows **realized PnL** ($ and %), and the tab totals it up.
+
+Keys are stored **server-side** and are **never returned to the browser** (the API only ever
+reports a masked `ABCD…WXYZ`). With a `DATABASE_URL` they persist across restarts; without one
+they reset on redeploy. You can also set `BINANCE_TESTNET_KEY` / `BINANCE_TESTNET_SECRET` /
+`AUTO_TRADE` / `TRADE_USD` as env vars instead of using the UI. **Use testnet keys only.**
+
+Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `GET /api/testnet/trades`.
+
 ## Deploy to Railway (one service, no DB)
 
 1. Create a service from this repo (Dockerfile build; leave Root Directory empty).

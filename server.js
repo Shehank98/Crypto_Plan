@@ -16,6 +16,7 @@
 
 require("dotenv").config();
 const path = require("path");
+const crypto = require("crypto");
 const express = require("express");
 const axios = require("axios");
 const cron = require("node-cron");
@@ -515,6 +516,14 @@ async function initStore() {
     for (const col of ["eta1_min DOUBLE PRECISION", "eta2_min DOUBLE PRECISION", "eta3_min DOUBLE PRECISION", "tp1_at TIMESTAMPTZ", "tp2_at TIMESTAMPTZ", "tp3_at TIMESTAMPTZ"]) {
       await pool.query(`ALTER TABLE tracked_signals ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
     }
+    // Testnet trading tables.
+    await pool.query(`CREATE TABLE IF NOT EXISTS testnet_trades (
+      id SERIAL PRIMARY KEY, symbol VARCHAR(20), tf VARCHAR(5), confidence INT,
+      qty DOUBLE PRECISION, entry_price DOUBLE PRECISION, tp1 DOUBLE PRECISION, stop DOUBLE PRECISION,
+      status VARCHAR(10) DEFAULT 'OPEN', exit_price DOUBLE PRECISION, exit_reason VARCHAR(10),
+      pnl_usd DOUBLE PRECISION, pnl_pct DOUBLE PRECISION,
+      opened_at TIMESTAMPTZ DEFAULT NOW(), closed_at TIMESTAMPTZ )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS app_settings ( k VARCHAR(40) PRIMARY KEY, v TEXT )`);
     // Remove tracked rows for timeframes we no longer scan (e.g. the dropped 5m)
     // so the Live/open trades list doesn't keep showing stale entries.
     const cleaned = await pool.query("DELETE FROM tracked_signals WHERE NOT (tf = ANY($1))", [TIMEFRAMES]).catch(() => null);
@@ -621,6 +630,7 @@ async function openFrom(data) {
   for (const s of data.signals) {
     if ((s.direction === "LONG" || s.direction === "SHORT") && s.confidence >= TRACK_MIN_CONFIDENCE && s.entry && s.targets) {
       await store.open(s).catch((e) => console.warn("[track]", e.message));
+      await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
     }
   }
 }
@@ -671,6 +681,110 @@ async function computeStats() {
     avgResultR: rs.length ? round(rs.reduce((a, b) => a + b, 0) / rs.length, 2) : null,
     byTimeframe: byTf,
   };
+}
+
+// ===========================================================================
+// Binance SPOT TESTNET trading (demo money only)
+// - Auto-buys $TRADE_USD of a coin when a >=95% LONG signal fires (spot = long only).
+// - Closes at TP1 (take profit) or the stop (safety), then records realized PnL.
+// Keys are stored server-side and NEVER returned to the browser.
+// ===========================================================================
+const TESTNET_BASE = process.env.BINANCE_TESTNET_BASE || "https://testnet.binance.vision";
+const settings = {
+  apiKey: process.env.BINANCE_TESTNET_KEY || "",
+  apiSecret: process.env.BINANCE_TESTNET_SECRET || "",
+  autoTrade: /^(1|true|yes|on)$/i.test(process.env.AUTO_TRADE || ""),
+  tradeUsd: Number(process.env.TRADE_USD || 100),
+};
+const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
+function maskKey(k) { return k ? k.slice(0, 4) + "…" + k.slice(-4) : ""; }
+
+async function tnPublic(pathname, params) { const r = await http.get(TESTNET_BASE + pathname, { params }); return r.data; }
+async function tnSigned(method, pathname, params = {}) {
+  if (!tnConfigured()) throw new Error("Testnet API keys not set");
+  const query = new URLSearchParams({ ...params, timestamp: Date.now(), recvWindow: 5000 }).toString();
+  const signature = crypto.createHmac("sha256", settings.apiSecret).update(query).digest("hex");
+  const url = `${TESTNET_BASE}${pathname}?${query}&signature=${signature}`;
+  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey } });
+  return r.data;
+}
+async function tnAccount() { return tnSigned("get", "/api/v3/account"); }
+async function tnFree(asset) { const a = await tnAccount(); const b = (a.balances || []).find((x) => x.asset === asset); return b ? +b.free : 0; }
+const tnStepCache = {};
+async function tnStep(symbol) {
+  if (tnStepCache[symbol]) return tnStepCache[symbol];
+  try { const info = await tnPublic("/api/v3/exchangeInfo", { symbol }); const f = (info.symbols?.[0]?.filters || []).find((x) => x.filterType === "LOT_SIZE"); const step = f ? +f.stepSize : 0.000001; tnStepCache[symbol] = step; return step; }
+  catch (e) { return 0.000001; }
+}
+function floorStep(qty, step) { if (!step) return qty; const dec = Math.max(0, Math.round(-Math.log10(step))); return Number((Math.floor(qty / step) * step).toFixed(dec)); }
+async function tnBuyQuote(symbol, quoteUsd) {
+  const d = await tnSigned("post", "/api/v3/order", { symbol, side: "BUY", type: "MARKET", quoteOrderQty: quoteUsd });
+  const qty = +d.executedQty, quote = +d.cummulativeQuoteQty; return { qty, quote, avg: qty ? quote / qty : null };
+}
+async function tnSellQty(symbol, qty) {
+  const step = await tnStep(symbol), q = floorStep(qty, step);
+  const d = await tnSigned("post", "/api/v3/order", { symbol, side: "SELL", type: "MARKET", quantity: q });
+  const eq = +d.executedQty, quote = +d.cummulativeQuoteQty; return { qty: eq, quote, avg: eq ? quote / eq : null };
+}
+
+// Executed testnet trades store (Postgres if available, else memory).
+const tnMem = []; let tnId = 1;
+const tstore = {
+  async openTrades() { if (useDb) return (await pool.query("SELECT * FROM testnet_trades WHERE status='OPEN' ORDER BY opened_at DESC")).rows; return tnMem.filter((t) => t.status === "OPEN"); },
+  async all(limit = 100) { if (useDb) return (await pool.query("SELECT * FROM testnet_trades ORDER BY opened_at DESC LIMIT $1", [limit])).rows; return tnMem.slice().reverse().slice(0, limit); },
+  async hasOpen(symbol) { if (useDb) { const { rows } = await pool.query("SELECT 1 FROM testnet_trades WHERE symbol=$1 AND status='OPEN' LIMIT 1", [symbol]); return rows.length > 0; } return tnMem.some((t) => t.symbol === symbol && t.status === "OPEN"); },
+  async insert(t) { if (useDb) { const { rows } = await pool.query("INSERT INTO testnet_trades (symbol,tf,confidence,qty,entry_price,tp1,stop) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id", [t.symbol, t.tf, t.confidence, t.qty, t.entry_price, t.tp1, t.stop]); return rows[0].id; } const id = tnId++; tnMem.push({ id, status: "OPEN", opened_at: new Date().toISOString(), ...t }); return id; },
+  async close(id, f) { if (useDb) { const keys = Object.keys(f); const set = keys.map((k, i) => `${k}=$${i + 2}`).join(","); await pool.query(`UPDATE testnet_trades SET ${set} WHERE id=$1`, [id, ...keys.map((k) => f[k])]); } else { const m = tnMem.find((x) => x.id === id); if (m) Object.assign(m, f); } },
+};
+
+// Persist settings so auto-trade survives restarts (durable only with Postgres).
+async function loadSettings() {
+  if (!useDb) return;
+  try { const { rows } = await pool.query("SELECT v FROM app_settings WHERE k='trade'"); if (rows[0]) { const s = JSON.parse(rows[0].v); Object.assign(settings, s); console.log("[testnet] settings loaded from DB"); } } catch (e) { /* table may not exist yet */ }
+}
+async function saveSettings() {
+  if (!useDb) return;
+  try { await pool.query("INSERT INTO app_settings (k,v) VALUES ('trade',$1) ON CONFLICT (k) DO UPDATE SET v=$1", [JSON.stringify(settings)]); } catch (e) { console.warn("[testnet] settings save:", e.message); }
+}
+
+// Place the buy when a >=95% LONG signal is logged.
+async function maybeAutoTrade(s) {
+  if (!settings.autoTrade || !tnConfigured()) return;
+  if (s.direction !== "LONG" || !s.entry || !s.targets) return;            // spot = long only
+  if (s.confidence < TRACK_MIN_CONFIDENCE) return;                          // >=95% only
+  const symbol = s.symbol + QUOTE;
+  if (await tstore.hasOpen(symbol)) return;                                 // one open trade per coin
+  try {
+    const buy = await tnBuyQuote(symbol, settings.tradeUsd);
+    if (!buy.qty || !buy.avg) return;
+    const gain1 = s.targets[0].gainPct || 1;                               // % from entry to TP1
+    const riskPct = s.stop.riskPct || 1;                                   // % from entry to stop
+    const tp1 = buy.avg * (1 + gain1 / 100), stop = buy.avg * (1 - riskPct / 100);
+    await tstore.insert({ symbol, tf: s.tf, confidence: s.confidence, qty: buy.qty, entry_price: rp(buy.avg), tp1: rp(tp1), stop: rp(stop) });
+    console.log(`[testnet] BUY ${symbol} qty ${buy.qty} @ ${buy.avg} (TP1 ${rp(tp1)}, stop ${rp(stop)})`);
+  } catch (e) { console.warn("[testnet] buy failed:", e.response?.data?.msg || e.message); }
+}
+// Close open testnet trades at TP1 (profit) or stop (safety); record PnL.
+async function manageTestnet(prices) {
+  if (!tnConfigured()) return;
+  let open;
+  try { open = await tstore.openTrades(); } catch (e) { return; }
+  for (const t of open) {
+    const base = t.symbol.replace(QUOTE, "");
+    const P = prices.get(base);
+    if (P == null) continue;
+    const reason = P >= t.tp1 ? "TP1" : P <= t.stop ? "STOP" : null;
+    if (!reason) continue;
+    try {
+      const free = await tnFree(base);
+      const sellQty = Math.min(free, t.qty);
+      if (sellQty <= 0) { await tstore.close(t.id, { status: "CLOSED", exit_reason: "NO_BAL", closed_at: new Date() }); continue; }
+      const sell = await tnSellQty(t.symbol, sellQty);
+      const pnl = (sell.avg - t.entry_price) * sell.qty, pnlPct = ((sell.avg - t.entry_price) / t.entry_price) * 100;
+      await tstore.close(t.id, { status: "CLOSED", exit_price: rp(sell.avg), exit_reason: reason, pnl_usd: round(pnl, 2), pnl_pct: round(pnlPct, 2), closed_at: new Date() });
+      console.log(`[testnet] SELL ${t.symbol} ${reason} PnL ${pnl.toFixed(2)} USDT`);
+    } catch (e) { console.warn("[testnet] sell failed:", e.response?.data?.msg || e.message); }
+  }
 }
 
 // ===========================================================================
@@ -754,6 +868,37 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
   res.json(await backtest(req.params.symbol.toUpperCase().replace(QUOTE, ""), tf, Number(req.query.bars) || 1000));
 }));
 
+// --- Settings & Binance Spot Testnet trading ---
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: TESTNET_BASE, durableSettings: useDb });
+app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
+app.post("/api/settings", wrap(async (req, res) => {
+  const b = req.body || {};
+  if (typeof b.apiKey === "string" && b.apiKey.trim()) settings.apiKey = b.apiKey.trim();
+  if (typeof b.apiSecret === "string" && b.apiSecret.trim()) settings.apiSecret = b.apiSecret.trim();
+  if (typeof b.autoTrade === "boolean") settings.autoTrade = b.autoTrade;
+  if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
+  if (b.clearKeys === true) { settings.apiKey = ""; settings.apiSecret = ""; settings.autoTrade = false; }
+  await saveSettings();
+  res.json(settingsView()); // never returns the secret
+}));
+// Verify the keys against the testnet and report tradeable USDT balance.
+app.post("/api/settings/test", wrap(async (_req, res) => {
+  if (!tnConfigured()) { res.status(400).json({ ok: false, error: "Enter your Testnet API key and secret first." }); return; }
+  try {
+    const a = await tnAccount();
+    const usdt = (a.balances || []).find((x) => x.asset === QUOTE);
+    res.json({ ok: true, canTrade: a.canTrade !== false, usdtFree: usdt ? +usdt.free : 0, accountType: a.accountType });
+  } catch (e) { res.status(400).json({ ok: false, error: e.response?.data?.msg || e.message }); }
+}));
+app.get("/api/testnet/trades", wrap(async (_req, res) => {
+  const rows = await tstore.all(100);
+  const open = rows.filter((t) => t.status === "OPEN");
+  const closed = rows.filter((t) => t.status === "CLOSED");
+  const pnl = closed.reduce((a, t) => a + (Number.isFinite(+t.pnl_usd) ? +t.pnl_usd : 0), 0);
+  const wins = closed.filter((t) => +t.pnl_usd > 0).length;
+  res.json({ configured: tnConfigured(), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, open, recent: closed.slice(0, 40), totalPnlUsd: round(pnl, 2), closed: closed.length, wins, losses: closed.length - wins });
+}));
+
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
@@ -815,6 +960,7 @@ async function liveTick() {
     const prices = await getTickerMap(); // one request for the whole market
     updateLivePrices(prices);
     await monitor(prices); // catch TP/SL hits near-instantly
+    await manageTestnet(prices); // close testnet trades at TP1/stop
   } catch (e) { console.warn("[live]", e.message); } finally { liveBusy = false; }
 }
 async function indicatorTick() {
@@ -835,6 +981,8 @@ function startLoops() {
 }
 async function boot() {
   try { await initStore(); } catch (e) { console.error("[store] init failed:", e.message); }
+  await loadSettings().catch(() => {});
+  if (tnConfigured()) console.log(`[testnet] keys loaded (auto-trade ${settings.autoTrade ? "ON" : "off"}, $${settings.tradeUsd}/trade)`);
   app.listen(PORT, () => console.log(`[server] signals on ${PORT}`));
   startTelegram();
   startLoops();
