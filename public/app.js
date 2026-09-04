@@ -404,7 +404,8 @@ async function load() {
     $("empty").classList.remove("hidden");
     $("empty").textContent = e.message;
   }
-  if (activeTab === "track") loadTrack();
+  // Track Record is NOT refreshed on the 5s signals tick (too noisy) — it updates
+  // on tab-open, manual Rescan, and a gentle timer (see init()).
 }
 
 async function rescan() {
@@ -414,6 +415,7 @@ async function rescan() {
   try {
     await api(`/api/rescan?tf=${encodeURIComponent(tf)}`).catch(() => {});
     await load();
+    if (activeTab === "track") await loadTrack();
   } finally {
     b.textContent = "↻ Rescan";
     b.disabled = false;
@@ -452,8 +454,10 @@ async function init() {
   $("chart-close").onclick = closeChart;
   $("chart-modal").onclick = (e) => { if (e.target.id === "chart-modal") closeChart(); };
   await load();
-  const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live auto-refresh
+  const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live signals auto-refresh
   setInterval(load, ms);
+  // Track Record refreshes gently (every 30s) so open trades don't flicker every 5s.
+  setInterval(() => { if (activeTab === "track") loadTrack(); }, 30000);
 }
 
 function drawSegs() {
