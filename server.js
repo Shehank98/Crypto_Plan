@@ -1149,7 +1149,8 @@ function startTelegram() {
         const chatId = cq.message.chat.id, plan = proposals.get(key);
         if (action === "take" && plan) {
           approved.set(key, { ...plan, chatId, alerted: false, at: Date.now() });
-          if (tnConfigured() && settings.autoTrade) { const scan = scanCache[plan.tf]?.data; const sig = scan?.signals.find((x) => x.symbol === plan.symbol && x.direction === plan.direction); if (sig) await maybeAutoTrade(sig).catch(() => {}); }
+          // Approval IS the go-ahead: place the testnet buy if keys are set (even if auto-trade is off).
+          if (tnConfigured()) { const scan = scanCache[plan.tf]?.data; const sig = scan?.signals.find((x) => x.symbol === plan.symbol && x.direction === plan.direction); if (sig && sig.direction === "LONG") { const savedAuto = settings.autoTrade; settings.autoTrade = true; await maybeAutoTrade(sig).catch(() => {}); settings.autoTrade = savedAuto; } }
           await bot.answerCallbackQuery(cq.id, { text: "Taking the trade ✅" }).catch(() => {});
           await bot.editMessageText(cq.message.text + `\n\n✅ TAKEN — I'll message you when TP1 hits (+$${plan.profit}).`, { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {});
         } else if (action === "skip") {

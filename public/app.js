@@ -739,8 +739,13 @@ async function saveSettings() {
   const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
   if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";
-  try { await api2("/api/settings", body); $("set-key").value = ""; $("set-secret").value = ""; $("set-status").innerHTML = '<span class="text-emerald-400">✓ Saved.</span>'; loadSettings(); }
-  catch (e) { $("set-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+  try {
+    const r = await api2("/api/settings", body);
+    $("set-key").value = ""; $("set-secret").value = "";
+    await loadSettings(); // refresh state first (this also writes to #set-status)
+    const stored = r.durableSettings ? "stored in the database ✓" : "saved (no database - they reset on redeploy; set DATABASE_URL to keep them)";
+    $("set-status").innerHTML = `<span class="text-emerald-400">✓ Keys ${stored}</span><br><span class="text-slate-500">Now press <b>Test connection</b>. If Test fails with a geo-block, that's a network issue (add a Proxy URL) - your keys are still saved.</span>`;
+  } catch (e) { $("set-status").innerHTML = `<span class="text-rose-400">Save failed: ${e.message}</span>`; }
 }
 async function testConnection() {
   $("set-status").textContent = "Testing…";
@@ -793,8 +798,13 @@ async function saveForex() {
   const k = $("fx-key").value.trim(), a = $("fx-account").value.trim();
   if (k) body.apiKey = k; if (a) body.accountId = a;
   $("fx-status").textContent = "Saving…";
-  try { await api2("/api/forex/config", body); $("fx-key").value = ""; $("fx-account").value = ""; $("fx-status").innerHTML = '<span class="text-emerald-400">✓ Saved.</span>'; loadForex(); }
-  catch (e) { $("fx-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+  try {
+    const r = await api2("/api/forex/config", body);
+    $("fx-key").value = ""; $("fx-account").value = "";
+    await loadForex();
+    const stored = r.durable ? "stored in the database ✓" : "saved (no database - they reset on redeploy)";
+    $("fx-status").innerHTML = `<span class="text-emerald-400">✓ Keys ${stored}</span><br><span class="text-slate-500">Now press <b>Test connection</b>. OANDA is usually not geo-blocked - if it fails, re-check the token/account id.</span>`;
+  } catch (e) { $("fx-status").innerHTML = `<span class="text-rose-400">Save failed: ${e.message}</span>`; }
 }
 async function testForex() {
   $("fx-status").textContent = "Testing…";
