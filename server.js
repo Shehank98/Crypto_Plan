@@ -689,23 +689,40 @@ async function computeStats() {
 // - Closes at TP1 (take profit) or the stop (safety), then records realized PnL.
 // Keys are stored server-side and NEVER returned to the browser.
 // ===========================================================================
-const TESTNET_BASE = process.env.BINANCE_TESTNET_BASE || "https://testnet.binance.vision";
 const settings = {
   apiKey: process.env.BINANCE_TESTNET_KEY || "",
   apiSecret: process.env.BINANCE_TESTNET_SECRET || "",
   autoTrade: /^(1|true|yes|on)$/i.test(process.env.AUTO_TRADE || ""),
   tradeUsd: Number(process.env.TRADE_USD || 100),
+  testnetBase: process.env.BINANCE_TESTNET_BASE || "https://testnet.binance.vision",
+  proxyUrl: process.env.BINANCE_PROXY_URL || "", // route testnet calls via an allowed region
 };
+let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
 function maskKey(k) { return k ? k.slice(0, 4) + "…" + k.slice(-4) : ""; }
+// Binance geo-blocks some regions (incl. many cloud IPs). A proxy in an allowed
+// region routes testnet trading around it.
+function proxyCfg() {
+  if (!settings.proxyUrl) return {};
+  try {
+    const u = new URL(settings.proxyUrl);
+    return { proxy: { protocol: u.protocol.replace(":", ""), host: u.hostname, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80), auth: u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : undefined } };
+  } catch (e) { return {}; }
+}
+// Human-friendly Binance error, with guidance for the geo-block case.
+function niceTnError(e) {
+  const msg = e.response?.data?.msg || e.message || "request failed";
+  if (/restricted location|Eligibility|restricted/i.test(msg)) return "Binance is geo-blocking this server's region. Add a Proxy URL (Settings) that exits in an allowed region, or host the app in an allowed region.";
+  return msg;
+}
 
-async function tnPublic(pathname, params) { const r = await http.get(TESTNET_BASE + pathname, { params }); return r.data; }
+async function tnPublic(pathname, params) { const r = await http.get(settings.testnetBase + pathname, { params, ...proxyCfg() }); return r.data; }
 async function tnSigned(method, pathname, params = {}) {
   if (!tnConfigured()) throw new Error("Testnet API keys not set");
   const query = new URLSearchParams({ ...params, timestamp: Date.now(), recvWindow: 5000 }).toString();
   const signature = crypto.createHmac("sha256", settings.apiSecret).update(query).digest("hex");
-  const url = `${TESTNET_BASE}${pathname}?${query}&signature=${signature}`;
-  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey } });
+  const url = `${settings.testnetBase}${pathname}?${query}&signature=${signature}`;
+  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey }, ...proxyCfg() });
   return r.data;
 }
 async function tnAccount() { return tnSigned("get", "/api/v3/account"); }
@@ -762,7 +779,7 @@ async function maybeAutoTrade(s) {
     const tp1 = buy.avg * (1 + gain1 / 100), stop = buy.avg * (1 - riskPct / 100);
     await tstore.insert({ symbol, tf: s.tf, confidence: s.confidence, qty: buy.qty, entry_price: rp(buy.avg), tp1: rp(tp1), stop: rp(stop) });
     console.log(`[testnet] BUY ${symbol} qty ${buy.qty} @ ${buy.avg} (TP1 ${rp(tp1)}, stop ${rp(stop)})`);
-  } catch (e) { console.warn("[testnet] buy failed:", e.response?.data?.msg || e.message); }
+  } catch (e) { lastTnError = niceTnError(e); console.warn("[testnet] buy failed:", lastTnError); }
 }
 // Close open testnet trades at TP1 (profit) or stop (safety); record PnL.
 async function manageTestnet(prices) {
@@ -783,7 +800,7 @@ async function manageTestnet(prices) {
       const pnl = (sell.avg - t.entry_price) * sell.qty, pnlPct = ((sell.avg - t.entry_price) / t.entry_price) * 100;
       await tstore.close(t.id, { status: "CLOSED", exit_price: rp(sell.avg), exit_reason: reason, pnl_usd: round(pnl, 2), pnl_pct: round(pnlPct, 2), closed_at: new Date() });
       console.log(`[testnet] SELL ${t.symbol} ${reason} PnL ${pnl.toFixed(2)} USDT`);
-    } catch (e) { console.warn("[testnet] sell failed:", e.response?.data?.msg || e.message); }
+    } catch (e) { lastTnError = niceTnError(e); console.warn("[testnet] sell failed:", lastTnError); }
   }
 }
 
@@ -869,7 +886,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: TESTNET_BASE, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -877,7 +894,10 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.apiSecret === "string" && b.apiSecret.trim()) settings.apiSecret = b.apiSecret.trim();
   if (typeof b.autoTrade === "boolean") settings.autoTrade = b.autoTrade;
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
+  if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
+  if (typeof b.proxyUrl === "string") settings.proxyUrl = b.proxyUrl.trim();
   if (b.clearKeys === true) { settings.apiKey = ""; settings.apiSecret = ""; settings.autoTrade = false; }
+  lastTnError = null;
   await saveSettings();
   res.json(settingsView()); // never returns the secret
 }));
@@ -887,8 +907,9 @@ app.post("/api/settings/test", wrap(async (_req, res) => {
   try {
     const a = await tnAccount();
     const usdt = (a.balances || []).find((x) => x.asset === QUOTE);
+    lastTnError = null;
     res.json({ ok: true, canTrade: a.canTrade !== false, usdtFree: usdt ? +usdt.free : 0, accountType: a.accountType });
-  } catch (e) { res.status(400).json({ ok: false, error: e.response?.data?.msg || e.message }); }
+  } catch (e) { lastTnError = niceTnError(e); res.status(400).json({ ok: false, error: lastTnError }); }
 }));
 app.get("/api/testnet/trades", wrap(async (_req, res) => {
   const rows = await tstore.all(100);

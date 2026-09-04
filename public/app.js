@@ -285,21 +285,27 @@ function openTradeAnalysis(x) {
     const legEst = (Number.isFinite(t.cum) ? t.cum : prevCum) - prevCum;
     const fromEntry = movePct(x.entry_mid, t.price, long);
     const fromPrev = movePct(t.prev, t.price, long);
-    let statusHtml, timeHtml;
-    if (t.hit && t.at) {
-      const legAct = minsBetween(t.prevAt, t.at);
-      statusHtml = `<span class="text-emerald-400">✅ hit ${slTime(t.at)}</span>`;
-      timeHtml = `est ${fmtDur(t.cum)} from entry${legAct != null ? ` · took ${fmtDur(legAct)} this leg` : ""}`;
-    } else {
-      const remaining = Number.isFinite(t.cum) && nowMin != null ? Math.max(0, t.cum - nowMin) : null;
-      statusHtml = t.k === nextK ? `<span class="text-sky-400">⏳ next target</span>` : `<span class="text-slate-500">pending</span>`;
-      timeHtml = Number.isFinite(t.cum) ? `est ${fmtDur(t.cum)} from entry${live && remaining != null ? ` · ~${fmtDur(remaining)} left` : ""}` : "—";
+    // Estimated vs ACTUAL time to reach this target (cumulative from entry).
+    const actCum = t.hit && t.at ? minsBetween(startedAt, t.at) : null;
+    const estCum = Number.isFinite(t.cum) ? t.cum : null;
+    let evaHtml = "";
+    if (actCum != null && estCum != null) {
+      const delta = actCum - estCum, ratio = estCum > 0 ? actCum / estCum : 1;
+      const cls = ratio <= 1.25 ? "text-emerald-400" : ratio <= 2 ? "text-amber-400" : "text-rose-400";
+      const tag = delta <= 0 ? `⚡ ${fmtDur(-delta)} early` : `🐢 ${fmtDur(delta)} late`;
+      evaHtml = `<div class="text-xs"><span class="text-slate-500">est ${fmtDur(estCum)}</span> → <span class="${cls}">actual ${fmtDur(actCum)}</span> <span class="${cls}">(${tag})</span></div>`;
+    } else if (estCum != null) {
+      const remaining = nowMin != null ? Math.max(0, estCum - nowMin) : null;
+      evaHtml = `<div class="text-xs"><span class="text-slate-500">est ${fmtDur(estCum)} from entry</span>${live && remaining != null ? ` · <span class="text-sky-300">~${fmtDur(remaining)} left</span>` : ""}</div>`;
     }
+    let statusHtml;
+    if (t.hit && t.at) statusHtml = `<span class="text-emerald-400">✅ hit ${slTime(t.at)}</span>`;
+    else statusHtml = t.k === nextK ? `<span class="text-sky-400">⏳ next target</span>` : `<span class="text-slate-500">pending</span>`;
     const border = t.hit ? "border-emerald-500" : t.k === nextK ? "border-sky-500" : "border-edge";
     const html = `<div class="border-l-2 ${border} pl-3 pb-3">
-      <div class="text-sm font-semibold text-slate-200">TP${t.k} <span class="text-xs text-slate-500">${t.k}R</span> · ${usd(t.price)}</div>
+      <div class="text-sm font-semibold text-slate-200">TP${t.k} <span class="text-xs text-slate-500">${t.k}R</span> · ${usd(t.price)} ${statusHtml}</div>
       <div class="text-xs text-slate-400">+${fromEntry}% from entry · +${fromPrev}% from ${t.prevLabel} · this leg ≈ ${fmtDur(legEst)}</div>
-      <div class="text-xs">${statusHtml} <span class="text-slate-500">${timeHtml}</span></div>
+      ${evaHtml}
     </div>`;
     prevCum = Number.isFinite(t.cum) ? t.cum : prevCum;
     return html;
@@ -615,7 +621,11 @@ async function loadSettings() {
     $("set-usd").value = s.tradeUsd;
     $("set-auto").checked = !!s.autoTrade;
     $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
-    if (!s.durableSettings) $("set-status").innerHTML = '<span class="text-amber-400">Note: no database — keys reset on redeploy. Set DATABASE_URL to persist.</span>';
+    $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
+    let note = "";
+    if (s.lastError) note += `<span class="text-rose-400">⚠ ${s.lastError}</span><br>`;
+    if (!s.durableSettings) note += '<span class="text-amber-400">Note: no database — keys reset on redeploy. Set DATABASE_URL to persist.</span>';
+    $("set-status").innerHTML = note;
   } catch (e) { /* ignore */ }
   loadTestnetTrades();
 }
@@ -639,8 +649,8 @@ async function loadTestnetTrades() {
 }
 async function saveSettings() {
   const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100 };
-  const k = $("set-key").value.trim(), sec = $("set-secret").value.trim();
-  if (k) body.apiKey = k; if (sec) body.apiSecret = sec;
+  const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
+  if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";
   try { await api2("/api/settings", body); $("set-key").value = ""; $("set-secret").value = ""; $("set-status").innerHTML = '<span class="text-emerald-400">✓ Saved.</span>'; loadSettings(); }
   catch (e) { $("set-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }

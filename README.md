@@ -119,6 +119,12 @@ reports a masked `ABCD…WXYZ`). With a `DATABASE_URL` they persist across resta
 they reset on redeploy. You can also set `BINANCE_TESTNET_KEY` / `BINANCE_TESTNET_SECRET` /
 `AUTO_TRADE` / `TRADE_USD` as env vars instead of using the UI. **Use testnet keys only.**
 
+**Geo-block:** Binance blocks many cloud regions ("Service unavailable from a restricted
+location"). If Test connection reports that, set a **Proxy URL** in Settings (or
+`BINANCE_PROXY_URL`, e.g. `http://user:pass@host:port`) that exits in an allowed region — the
+testnet calls are routed through it. The error message in Settings tells you when this is the
+cause.
+
 Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `GET /api/testnet/trades`.
 
 ## Deploy to Railway (one service, no DB)
