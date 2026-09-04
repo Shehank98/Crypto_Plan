@@ -38,11 +38,12 @@ Indicators (all dependency-free, reimplemented from scratch — inspired by **ta
 to the confidence score so weak setups are filtered out.
 
 **Multi-timeframe confluence (accuracy):** a signal is boosted when the **next timeframe up**
-agrees (a 1h LONG confirmed by the 4h uptrend) and penalised when it conflicts — reusing the
-higher-TF scan so it costs no extra API calls. This is the single biggest lift to win rate.
+agrees and penalised when it conflicts — the chain runs **15m → 1h → 4h → 1d**, so a 4h LONG
+must line up with the **daily** trend. It reuses the higher-TF scan, so it costs no extra API
+calls. This is the single biggest lift to win rate.
 
 **Click any card → full analysis** (`GET /api/analysis/:symbol?tf=1h`): direction + confidence,
-a **multi-timeframe agreement** table (15m/1h/4h) with a consensus verdict, every indicator with
+a **multi-timeframe agreement** table (15m/1h/4h/1d) with a consensus verdict, every indicator with
 a plain-English read, detected candlestick patterns, the full trade plan with reasons, and a
 historical backtest — all in one popup.
 
@@ -107,7 +108,7 @@ dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
 | `PORT` | injected | Railway sets it |
 | `UNIVERSE_SIZE` | `50` | How many top markets to scan |
 | `QUOTE` | `USDT` | Quote asset for pairs |
-| `SIGNAL_TF` | `1h` | Default timeframe: `5m`/`15m`/`1h`/`4h` |
+| `SIGNAL_TF` | `1h` | Default timeframe: `15m`/`1h`/`4h`/`1d` |
 | `SIGNAL_MIN_CONFIDENCE` | `45` | Min % to emit LONG/SHORT (lower = more signals) |
 | `SCAN_INTERVAL_SEC` | `5` | Live auto-scan cadence in **seconds** (min 3). The whole market + open-trade monitor refresh on this tick; the UI polls at the same rate. Raise it if you hit exchange rate limits. |
 | `FALLBACK_USD_LKR` | `300` | FX fallback for LKR display |
@@ -146,7 +147,7 @@ evidence the setup has an edge on that pair — not a separate, prettier model.
 
 The **🎯 Track Record** tab separates the confusing multi-timeframe view into one place:
 
-- **Filter by timeframe** (5m / 15m / 1h / 4h / All) and **search a coin**.
+- **Filter by timeframe** (15m / 1h / 4h / 1d / All) and **search a coin**.
 - **Win rate by timeframe** table so you can see which timeframe is pulling its weight.
 - **Live / open trades** with a **progress-to-TP1 bar** and current **Open R** and gain %.
 - **Recent results** with the realized **gain %** per closed trade.

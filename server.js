@@ -27,7 +27,7 @@ const PORT = process.env.PORT || 3000;
 const QUOTE = (process.env.QUOTE || "USDT").toUpperCase();
 const UNIVERSE_SIZE = Number(process.env.UNIVERSE_SIZE || 60);
 const SIGNAL_TF = process.env.SIGNAL_TF || "1h";
-const TIMEFRAMES = ["15m", "1h", "4h"]; // 5m dropped — too noisy for reliable signals
+const TIMEFRAMES = ["15m", "1h", "4h", "1d"]; // 5m dropped (too noisy); 1d added for higher-TF confirmation
 const MIN_CONFIDENCE = Number(process.env.SIGNAL_MIN_CONFIDENCE || 45);
 const TRACK_MIN_CONFIDENCE = Number(process.env.TRACK_MIN_CONFIDENCE || 55);
 const SCAN_INTERVAL_SEC = Math.max(3, Number(process.env.SCAN_INTERVAL_SEC || 5)); // live price/monitor tick
@@ -40,7 +40,7 @@ const EXCHANGE_ORDER = (process.env.EXCHANGES || "binance").split(",").map((s) =
 // mirror that usually works even where api.binance.com is geo-blocked.
 const BINANCE_HOSTS = (process.env.BINANCE_HOSTS || "https://data-api.binance.vision,https://api.binance.com,https://api-gcp.binance.com,https://api1.binance.com").split(",").map((h) => h.trim());
 
-const TF_MINUTES = { "5m": 5, "15m": 15, "1h": 60, "4h": 240 };
+const TF_MINUTES = { "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
 const EXCLUDE_BASES = new Set(["USDC", "FDUSD", "TUSD", "BUSD", "DAI", "USDP", "EUR", "GBP", "USDT", "USD", "WBTC", "WETH"]);
 const LEVERAGED = /(UP|DOWN|BULL|BEAR|[0-9]+L|[0-9]+S)$/;
 
@@ -208,7 +208,7 @@ const adapters = {
       return (data.result?.list || []).filter((t) => t.symbol.endsWith(QUOTE)).map((t) => ({ base: t.symbol.slice(0, -QUOTE.length), quoteVolume: +t.turnover24h, last: +t.lastPrice, changePct: +t.price24hPcnt * 100 }));
     },
     async klines(base, tf, limit) {
-      const iv = { "5m": "5", "15m": "15", "1h": "60", "4h": "240" }[tf];
+      const iv = { "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D" }[tf];
       const { data } = await http.get("https://api.bybit.com/v5/market/kline", { params: { category: "spot", symbol: base + QUOTE, interval: iv, limit } });
       const rows = [...(data.result?.list || [])].reverse(); // [start,open,high,low,close,volume,turnover]
       return { times: rows.map((r) => +r[0]), opens: rows.map((r) => +r[1]), highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[3]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
@@ -221,7 +221,7 @@ const adapters = {
       return (data.data || []).filter((t) => t.instId.endsWith("-" + QUOTE)).map((t) => { const last = +t.last, open = +t.open24h; return { base: t.instId.split("-")[0], quoteVolume: +t.volCcy24h, last, changePct: open ? ((last - open) / open) * 100 : 0 }; });
     },
     async klines(base, tf, limit) {
-      const bar = { "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H" }[tf];
+      const bar = { "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D" }[tf];
       const { data } = await http.get("https://www.okx.com/api/v5/market/candles", { params: { instId: base + "-" + QUOTE, bar, limit } });
       const rows = [...(data.data || [])].reverse(); // [ts,o,h,l,c,vol,...]
       return { times: rows.map((r) => +r[0]), opens: rows.map((r) => +r[1]), highs: rows.map((r) => +r[2]), lows: rows.map((r) => +r[3]), closes: rows.map((r) => +r[4]), volumes: rows.map((r) => +r[5]) };
@@ -245,7 +245,7 @@ async function detectSource() {
 }
 
 // Coinbase per-coin kline fallback (spot USD).
-const CB_G = { "5m": 300, "15m": 900, "1h": 3600 };
+const CB_G = { "5m": 300, "15m": 900, "1h": 3600, "1d": 86400 };
 async function coinbaseKlines(base, tf) {
   const g = CB_G[tf];
   if (!g) return null;
@@ -375,8 +375,8 @@ async function signalFor(base, tf, fx, opts = {}) {
   catch (e) { return { base, symbol: base, tf, error: e.message }; }
 }
 
-// The next timeframe up — used for multi-timeframe confluence.
-const HTF_OF = { "15m": "1h", "1h": "4h", "4h": null };
+// The next timeframe up — used for multi-timeframe confluence (chains up to 1D).
+const HTF_OF = { "15m": "1h", "1h": "4h", "4h": "1d", "1d": null };
 // Build base -> trend direction from a recent higher-TF scan cache (no extra fetches).
 function htfTrendMap(htf) {
   const c = scanCache[htf];
@@ -515,6 +515,10 @@ async function initStore() {
     for (const col of ["eta1_min DOUBLE PRECISION", "eta2_min DOUBLE PRECISION", "eta3_min DOUBLE PRECISION", "tp1_at TIMESTAMPTZ", "tp2_at TIMESTAMPTZ", "tp3_at TIMESTAMPTZ"]) {
       await pool.query(`ALTER TABLE tracked_signals ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
     }
+    // Remove tracked rows for timeframes we no longer scan (e.g. the dropped 5m)
+    // so the Live/open trades list doesn't keep showing stale entries.
+    const cleaned = await pool.query("DELETE FROM tracked_signals WHERE NOT (tf = ANY($1))", [TIMEFRAMES]).catch(() => null);
+    if (cleaned && cleaned.rowCount) console.log(`[store] removed ${cleaned.rowCount} tracked rows for retired timeframes`);
     await pool.query("SELECT 1");
     console.log("[store] Postgres ready (durable tracking)");
   } catch (e) {
@@ -752,7 +756,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
-  const rows = await store.recent(120);
+  const rows = (await store.recent(120)).filter((t) => TIMEFRAMES.includes(t.tf)); // hide retired TFs (5m)
   const withLive = rows.map((t) => {
     const P = prices.get(t.symbol);
     let rr = null;
