@@ -5,7 +5,7 @@ const DIR = {
   SHORT: { cls: "bg-rose-500/15 text-rose-300 border-rose-500/40", bar: "#f43f5e" },
   NEUTRAL: { cls: "bg-slate-500/15 text-slate-300 border-slate-500/40", bar: "#64748b" },
 };
-let CONFIG = { tf: "1h", timeframes: ["5m", "15m", "1h", "4h"] };
+let CONFIG = { tf: "1h", timeframes: ["15m", "1h", "4h"] };
 let tf = "1h";
 let filter = "actionable"; // actionable | LONG | SHORT | all
 let search = "";
@@ -363,7 +363,7 @@ let trackTf = "all";
 let trackSearch = "";
 let lastTrack = { open: [], recent: [] };
 function drawTrackTf() {
-  seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["5m", "15m", "1h", "4h"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
+  seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
   const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }];
@@ -381,7 +381,7 @@ async function init() {
   try { CONFIG = await api("/api/config"); } catch (e) { /* defaults */ }
   tf = CONFIG.tf || "1h";
   drawTabs();
-  seg($("tf-buttons"), (CONFIG.timeframes || ["5m", "15m", "1h", "4h"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
+  seg($("tf-buttons"), (CONFIG.timeframes || ["15m", "1h", "4h"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
   seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
   $("search").oninput = (e) => { search = e.target.value.trim(); render(); };
   drawTrackTf();
@@ -395,7 +395,7 @@ async function init() {
 }
 
 function drawSegs() {
-  seg($("tf-buttons"), (CONFIG.timeframes || ["5m", "15m", "1h", "4h"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
+  seg($("tf-buttons"), (CONFIG.timeframes || ["15m", "1h", "4h"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
   seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
 }
 
