@@ -674,16 +674,18 @@ function drawTrackTf() {
   seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
-  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "settings", label: "⚙️ Settings" }];
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
   $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     activeTab = b.dataset.tab;
     $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
     $("tab-track").classList.toggle("hidden", activeTab !== "track");
+    $("tab-forex").classList.toggle("hidden", activeTab !== "forex");
     $("tab-settings").classList.toggle("hidden", activeTab !== "settings");
     drawTabs();
     if (activeTab === "track") loadTrack();
     if (activeTab === "settings") loadSettings();
+    if (activeTab === "forex") loadForex();
   }));
 }
 
@@ -750,6 +752,93 @@ async function api2(p, body) {
   return b;
 }
 
+// ---------- Forex Bot ----------
+let FXCFG = null;
+const fxNum = (n) => (Number.isFinite(+n) ? (+n).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "-");
+async function loadForex() {
+  try { FXCFG = await api("/api/forex/config"); } catch (e) { return; }
+  const s = FXCFG;
+  $("fx-risk2").textContent = s.riskPerTradeUsd;
+  $("fx-account").placeholder = s.configured ? `saved ${s.accountId} (enter to replace)` : "101-001-…";
+  $("fx-key").placeholder = s.configured ? `saved ${s.keyMasked} (enter to replace)` : "OANDA API token";
+  $("fx-type").value = s.accountType; $("fx-pair").value = s.pair; $("fx-tf").value = s.granularity;
+  $("fx-risk").value = s.riskPerTradeUsd; $("fx-dailyloss").value = s.dailyMaxLossUsd;
+  // strategy dropdown
+  const strat = $("fx-strategy");
+  strat.innerHTML = Object.entries(s.strategies).map(([k, v]) => `<option value="${k}" ${k === s.strategy ? "selected" : ""}>${v.name}</option>`).join("");
+  renderFxParams(s);
+  // diagnostic
+  const el = $("fx-diag");
+  if (!s.configured) { el.className = "mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"; el.innerHTML = "Connect an OANDA <b>practice</b> account below to start. See the setup guide in the README."; el.classList.remove("hidden"); }
+  else if (s.lastError) { el.className = "mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"; el.innerHTML = "⚠ " + s.lastError; el.classList.remove("hidden"); }
+  else if (!s.durable) { el.className = "mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"; el.innerHTML = "No database - config and trade log reset on redeploy. Set DATABASE_URL to persist."; el.classList.remove("hidden"); }
+  else el.classList.add("hidden");
+  loadForexLive(); loadForexTrades();
+}
+function renderFxParams(s) {
+  const key = ($("fx-strategy") && $("fx-strategy").value) || s.strategy;
+  const p = ((s.strategies && s.strategies[key]) || {}).defaults || s.params || {};
+  const cur = s.params || {};
+  $("fx-params").innerHTML = `<label class="mb-1 block text-xs text-slate-400">Strategy parameters</label><div class="grid grid-cols-3 gap-2">${Object.keys(p).map((k) => `<div><span class="text-[11px] text-slate-500">${k}</span><input data-param="${k}" type="number" step="any" value="${cur[k] ?? p[k]}" class="w-full rounded border border-edge bg-ink px-2 py-1 text-xs" /></div>`).join("")}</div>`;
+}
+function fxParamsBody() { const o = {}; document.querySelectorAll("#fx-params [data-param]").forEach((i) => { if (i.value !== "") o[i.dataset.param] = Number(i.value); }); return o; }
+async function saveForex() {
+  const body = { accountType: $("fx-type").value, pair: $("fx-pair").value.trim().toUpperCase(), granularity: $("fx-tf").value, strategy: $("fx-strategy").value, riskPerTradeUsd: Number($("fx-risk").value) || 10, dailyMaxLossUsd: Number($("fx-dailyloss").value) || 50, params: fxParamsBody() };
+  const k = $("fx-key").value.trim(), a = $("fx-account").value.trim();
+  if (k) body.apiKey = k; if (a) body.accountId = a;
+  $("fx-status").textContent = "Saving…";
+  try { await api2("/api/forex/config", body); $("fx-key").value = ""; $("fx-account").value = ""; $("fx-status").innerHTML = '<span class="text-emerald-400">✓ Saved.</span>'; loadForex(); }
+  catch (e) { $("fx-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function testForex() {
+  $("fx-status").textContent = "Testing…";
+  try { const r = await api2("/api/forex/test", {}); $("fx-status").innerHTML = r.ok ? `<span class="text-emerald-400">✓ Connected (${r.accountType}). Balance ${fxNum(r.balance)} ${r.currency}, ${r.openTradeCount} open.</span>` : `<span class="text-rose-400">${r.error}</span>`; }
+  catch (e) { $("fx-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function loadForexLive() {
+  let l; try { l = await api("/api/forex/live"); } catch (e) { return; }
+  const badge = l.halted ? '<span class="pill bg-rose-900 text-rose-200">Halted (daily loss)</span>' : l.running ? '<span class="pill bg-emerald-900 text-emerald-200">Running</span>' : '<span class="pill bg-slate-800 text-slate-400">Stopped</span>';
+  $("fx-live").innerHTML = `${badge} ${l.running ? `${l.pair} · ${l.granularity} · day PnL <b class="${l.dayPnl > 0 ? "text-emerald-400" : l.dayPnl < 0 ? "text-rose-400" : ""}">${fxNum(l.dayPnl)}</b> / -${fxNum(l.dailyMaxLossUsd)} limit` : ""}${l.note ? `<div class="mt-1 text-slate-500">${l.note}</div>` : ""}`;
+  const open = (await api("/api/forex/trades?mode=live&limit=50").catch(() => ({ trades: [] }))).trades.filter((t) => t.status === "open");
+  $("fx-open").innerHTML = open.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Pair</th><th>Side</th><th class="text-right">Entry</th><th class="text-right">SL</th><th class="text-right">TP</th><th class="text-right">Size</th></tr></thead><tbody>${open.map((t) => `<tr class="border-b border-edge/60"><td class="py-1.5">${t.currency_pair}</td><td class="py-1.5 ${t.side === "buy" ? "text-emerald-400" : "text-rose-400"}">${t.side}</td><td class="py-1.5 text-right tabular-nums">${t.entry_price}</td><td class="py-1.5 text-right tabular-nums text-rose-300">${t.stop_loss}</td><td class="py-1.5 text-right tabular-nums text-emerald-300">${t.take_profit}</td><td class="py-1.5 text-right tabular-nums">${t.position_size}</td></tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="py-2 text-slate-500">No open positions.</td></tr></tbody>';
+}
+async function runForexBacktest() {
+  $("fx-bt-status").textContent = "Running… (pulls history from OANDA)";
+  try {
+    const b = await api2("/api/forex/backtest", { count: Number($("fx-bt-count").value) || 1500 });
+    if (b.error) { $("fx-bt-status").innerHTML = `<span class="text-rose-400">${b.error}</span>`; return; }
+    $("fx-bt-status").textContent = "";
+    const s = b.summary;
+    const chip = (l, v, cls) => `<span class="pill border border-edge bg-panel px-3 py-1.5 text-slate-300">${l} <b class="${cls || "text-white"}">${v}</b></span>`;
+    $("fx-bt-summary").innerHTML = [
+      chip("Trades", s.trades), chip("Win rate", (s.winRatePct ?? "-") + "%", s.winRatePct >= 50 ? "text-emerald-400" : "text-rose-400"),
+      chip("Total PnL", fxNum(s.totalPnl), s.totalPnl > 0 ? "text-emerald-400" : "text-rose-400"),
+      chip("Avg / trade", fxNum(s.avgPnl)), chip("Max DD", fxNum(s.maxDrawdown), "text-rose-400"), chip("Sharpe", s.sharpe ?? "-"),
+    ].join(" ");
+    $("fx-equity").innerHTML = equitySvg(b.equity);
+    loadForexTrades();
+  } catch (e) { $("fx-bt-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+function equitySvg(points) {
+  if (!points || !points.length) return '<p class="text-xs text-slate-500">No equity to plot.</p>';
+  const W = 640, H = 140, pad = 6, ys = points.map((p) => p.equity), min = Math.min(0, ...ys), max = Math.max(0, ...ys), span = max - min || 1;
+  const x = (i) => pad + (i / (points.length - 1 || 1)) * (W - 2 * pad), y = (v) => H - pad - ((v - min) / span) * (H - 2 * pad);
+  const d = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.equity).toFixed(1)}`).join(" ");
+  const zero = y(0), up = ys[ys.length - 1] >= 0;
+  return `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="max-width:100%"><line x1="${pad}" y1="${zero}" x2="${W - pad}" y2="${zero}" stroke="#334155" stroke-dasharray="3 3"/><path d="${d}" fill="none" stroke="${up ? "#10b981" : "#f43f5e"}" stroke-width="1.5"/></svg>`;
+}
+async function loadForexTrades() {
+  const mode = $("fx-h-mode").value, pair = $("fx-h-pair").value.trim().toUpperCase();
+  const qs = new URLSearchParams({ limit: 200 }); if (mode) qs.set("mode", mode); if (pair) qs.set("pair", pair);
+  $("fx-h-csv").href = "/api/forex/trades.csv?" + qs.toString();
+  let rows; try { rows = (await api("/api/forex/trades?" + qs.toString())).trades; } catch (e) { return; }
+  $("fx-history").innerHTML = rows.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Mode</th><th>Pair</th><th>Side</th><th class="text-right">Entry</th><th class="text-right">Exit</th><th class="text-right">Size</th><th class="text-right">PnL</th><th>Status</th><th class="text-right">Opened</th></tr></thead><tbody>${rows.map((t) => `<tr class="border-b border-edge/60"><td class="py-1.5"><span class="pill ${t.mode === "live" ? "bg-sky-900 text-sky-200" : "bg-slate-800 text-slate-300"}">${t.mode}</span></td><td class="py-1.5">${t.currency_pair}</td><td class="py-1.5 ${t.side === "buy" ? "text-emerald-400" : "text-rose-400"}">${t.side}</td><td class="py-1.5 text-right tabular-nums">${t.entry_price ?? "-"}</td><td class="py-1.5 text-right tabular-nums">${t.exit_price ?? "-"}</td><td class="py-1.5 text-right tabular-nums">${t.position_size ?? "-"}</td><td class="py-1.5 text-right tabular-nums ${t.pnl > 0 ? "text-emerald-400" : t.pnl < 0 ? "text-rose-400" : "text-slate-400"}">${t.pnl != null ? fxNum(t.pnl) : "-"}</td><td class="py-1.5 text-xs ${t.status === "open" ? "text-sky-400" : "text-slate-400"}">${t.status}</td><td class="py-1.5 text-right text-xs text-slate-500">${t.opened_at ? slTime(t.opened_at) : ""}</td></tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No trades yet. Run a backtest or start the live bot.</td></tr></tbody>';
+}
+
 async function init() {
   try { CONFIG = await api("/api/config"); } catch (e) { /* defaults */ }
   tf = CONFIG.tf || "1h";
@@ -770,6 +859,15 @@ async function init() {
   $("set-test").onclick = testConnection;
   $("set-clear").onclick = clearKeys;
   setInterval(() => { if (activeTab === "settings") loadTestnetTrades(); }, 15000); // refresh testnet PnL
+  // Forex bot wiring
+  $("fx-save").onclick = saveForex;
+  $("fx-test").onclick = testForex;
+  $("fx-strategy").onchange = () => renderFxParams(FXCFG || { strategies: {}, params: {} });
+  $("fx-bt-run").onclick = runForexBacktest;
+  $("fx-start").onclick = async () => { try { await api2("/api/forex/live/start", {}); loadForexLive(); } catch (e) { $("fx-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; } };
+  $("fx-stop").onclick = async () => { try { await api2("/api/forex/live/stop", {}); loadForexLive(); } catch (e) { /* ignore */ } };
+  $("fx-h-refresh").onclick = loadForexTrades;
+  setInterval(() => { if (activeTab === "forex") loadForexLive(); }, 20000); // refresh live status
   await load();
   const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live signals auto-refresh
   setInterval(load, ms);

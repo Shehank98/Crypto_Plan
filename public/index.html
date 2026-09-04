@@ -122,6 +122,68 @@
       </div>
     </div>
 
+    <!-- FOREX BOT TAB -->
+    <div id="tab-forex" class="hidden">
+      <div id="fx-diag" class="mb-3 hidden rounded-lg border px-3 py-2 text-xs"></div>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <!-- Connection + strategy config -->
+        <div class="card p-4">
+          <h3 class="mb-1 text-sm font-semibold text-slate-300">🔌 OANDA connection</h3>
+          <p class="mb-3 text-xs text-slate-500">Forex via <b>OANDA v20</b>. Start on a <b>practice</b> (demo) account. Keys are stored on your server, never shown back. We risk about <b>$<span id="fx-risk2">10</span></b> per trade.</p>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="mb-1 block text-xs text-slate-400">API token</label><input id="fx-key" type="password" placeholder="OANDA API token" class="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" /></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Account ID</label><input id="fx-account" placeholder="101-001-…" class="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" /></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Account type</label><select id="fx-type" class="w-full rounded-lg border border-edge bg-ink px-2 py-2 text-sm"><option value="practice">Practice (demo)</option><option value="live">Live (real money)</option></select></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Pair</label><input id="fx-pair" value="EUR_USD" class="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" /></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Timeframe</label><select id="fx-tf" class="w-full rounded-lg border border-edge bg-ink px-2 py-2 text-sm"><option>M5</option><option>M15</option><option>M30</option><option>H1</option><option>H4</option><option>D</option></select></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Strategy</label><select id="fx-strategy" class="w-full rounded-lg border border-edge bg-ink px-2 py-2 text-sm"></select></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Risk $/trade</label><input id="fx-risk" type="number" value="10" class="w-full rounded-lg border border-edge bg-ink px-2 py-2 text-sm" /></div>
+            <div><label class="mb-1 block text-xs text-slate-400">Daily max loss $</label><input id="fx-dailyloss" type="number" value="50" class="w-full rounded-lg border border-edge bg-ink px-2 py-2 text-sm" /></div>
+          </div>
+          <div id="fx-params" class="mt-2"></div>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button id="fx-save" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
+            <button id="fx-test" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">Test connection</button>
+          </div>
+          <p id="fx-status" class="mt-3 text-xs"></p>
+        </div>
+        <!-- Live bot control -->
+        <div class="card p-4">
+          <h3 class="mb-2 text-sm font-semibold text-slate-300">🤖 Live bot</h3>
+          <div id="fx-live" class="mb-3 text-xs text-slate-400"></div>
+          <div class="flex gap-2">
+            <button id="fx-start" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500">▶ Start bot</button>
+            <button id="fx-stop" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm text-rose-300 hover:bg-edge">■ Stop</button>
+          </div>
+          <h4 class="mb-1 mt-4 text-xs font-semibold uppercase text-slate-500">Open positions</h4>
+          <div class="overflow-x-auto"><table class="w-full text-sm" id="fx-open"></table></div>
+          <p class="mt-3 text-[11px] text-slate-500">The bot evaluates the strategy on each new candle close and places market orders with a stop-loss and take-profit. It halts for the day if the daily max loss is hit.</p>
+        </div>
+      </div>
+      <!-- Backtest -->
+      <div class="card mt-4 p-4">
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">⏮ Backtest</h3>
+        <div class="mb-3 flex flex-wrap items-end gap-2 text-xs">
+          <div><label class="mb-1 block text-slate-400">Candles</label><input id="fx-bt-count" type="number" value="1500" class="w-24 rounded-lg border border-edge bg-ink px-2 py-1.5 text-sm" /></div>
+          <button id="fx-bt-run" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">Run backtest</button>
+          <span id="fx-bt-status" class="text-slate-500"></span>
+        </div>
+        <div id="fx-bt-summary" class="mb-2 flex flex-wrap gap-2"></div>
+        <div id="fx-equity" class="w-full overflow-x-auto"></div>
+      </div>
+      <!-- Trade history -->
+      <div class="card mt-4 p-4">
+        <div class="mb-2 flex flex-wrap items-center gap-2">
+          <h3 class="text-sm font-semibold text-slate-300">Trade history</h3>
+          <select id="fx-h-mode" class="rounded-lg border border-edge bg-ink px-2 py-1 text-xs"><option value="">All modes</option><option value="backtest">Backtest</option><option value="live">Live</option></select>
+          <input id="fx-h-pair" placeholder="Pair filter" class="w-28 rounded-lg border border-edge bg-ink px-2 py-1 text-xs" />
+          <button id="fx-h-refresh" class="rounded-lg border border-edge bg-panel px-2 py-1 text-xs hover:bg-edge">Refresh</button>
+          <a id="fx-h-csv" href="/api/forex/trades.csv" class="ml-auto rounded-lg border border-edge bg-panel px-2 py-1 text-xs hover:bg-edge">⬇ Export CSV</a>
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="fx-history"></table></div>
+      </div>
+    </div>
+
     <p class="mt-8 text-center text-xs text-slate-500">
       Data: Binance (USDT spot). Trend-following signals are educational, not financial advice - always use your own stop.
     </p>

@@ -20,6 +20,7 @@ const crypto = require("crypto");
 const express = require("express");
 const axios = require("axios");
 const cron = require("node-cron");
+const createForex = require("./forex");
 
 // ---------------------------------------------------------------------------
 // Config
@@ -618,6 +619,7 @@ async function initStore() {
       pnl_usd DOUBLE PRECISION, pnl_pct DOUBLE PRECISION,
       opened_at TIMESTAMPTZ DEFAULT NOW(), closed_at TIMESTAMPTZ )`);
     await pool.query(`CREATE TABLE IF NOT EXISTS app_settings ( k VARCHAR(40) PRIMARY KEY, v TEXT )`);
+    await forex.initSchema().catch((e) => console.warn("[forex] schema:", e.message));
     // Remove tracked rows for timeframes we no longer scan (e.g. the dropped 5m)
     // so the Live/open trades list doesn't keep showing stale entries.
     const cleaned = await pool.query("DELETE FROM tracked_signals WHERE NOT (tf = ANY($1))", [TIMEFRAMES]).catch(() => null);
@@ -940,6 +942,10 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => { console.error("[api]", e.message); res.status(e.statusCode || 500).json({ error: e.message }); });
+
+// Forex Bot module (OANDA) - mounted under /api/forex, uses the same pool/DB.
+const forex = createForex({ http, pool, useDb: () => useDb, round });
+app.use("/api/forex", forex.router);
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok", source: ACTIVE?.name || null, durable: useDb, dbError }));
 app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, trackMinConfidence: TRACK_MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, dbError, scanIntervalSec: SCAN_INTERVAL_SEC, indicatorRefreshSec: INDICATOR_REFRESH_SEC }));

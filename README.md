@@ -157,6 +157,65 @@ cause.
 
 Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `GET /api/testnet/trades`.
 
+## Forex Bot (OANDA v20) - full setup guide
+
+A separate **💱 Forex Bot** tab trades FX through **OANDA** (a regulated broker with a
+free demo account and a clean API). It reuses the same database and layout. Backtest and
+live trades are **all logged automatically** to a `forex_trades` table (inserted on open,
+updated on close), and the history is filterable and **exportable to CSV**.
+
+> Never trade real money until you've watched it on the practice account for a while. Start
+> on **practice**. The default strategy (EMA crossover + RSI filter) is a **starting point,
+> not a guaranteed edge** - the strategy layer is swappable so you can tune and re-test.
+
+### 1. Make an OANDA practice account (5 min, free, no deposit)
+1. Go to **oanda.com** → open a **"Practice" / demo (fxTrade Practice)** account. Pick your
+   region; a demo account funds itself with fake money.
+2. Log in to the demo, open **Manage API Access** (Account → "My Services" / API), and
+   **Generate** a personal access **token**. Copy it.
+3. Find your **Account ID** (looks like `101-001-1234567-001`) in the account list.
+
+### 2. Connect it in the app
+Open the **💱 Forex Bot** tab → the **OANDA connection** card:
+- Paste the **API token** and **Account ID**, leave type on **Practice**.
+- Set the **pair** (default `EUR_USD`), **timeframe** (`M15`), **risk $/trade** (`10`),
+  and **daily max loss** (`50`). Save, then **Test connection** (shows your demo balance).
+- Keys are stored **server-side** and never shown back (only a masked `key-…1234`).
+
+You can also set `OANDA_API_KEY` / `OANDA_ACCOUNT_ID` / `OANDA_ACCOUNT_TYPE` as env vars.
+
+### 3. Backtest first
+In the **Backtest** card pick a candle count and **Run backtest**. It pulls historical
+OANDA candles, replays the strategy, logs every simulated trade (`mode=backtest`), and shows
+**win rate, total PnL, max drawdown, Sharpe** plus an **equity curve**.
+
+### 4. Go live on the demo
+Press **▶ Start bot**. The bot then, every ~20s, checks for a new **candle close**, evaluates
+the strategy, and - on a signal, one position per pair - places a **market order with a
+stop-loss and take-profit** on OANDA. It logs the trade live, reconciles closes (SL/TP) with
+realized PnL, and **halts for the day if the daily max-loss limit is hit**. Press **■ Stop**
+to stop.
+
+### Position size / "$10 per trade"
+Size is derived from your **risk**: `units ≈ risk$ ÷ (entry − stop distance)`, capped by
+`FOREX_MAX_UNITS`. So a wider stop → fewer units, keeping the dollar risk near your setting.
+For USD-quoted pairs (EUR_USD, GBP_USD) the PnL is in USD; other pairs are approximate.
+
+### Deploying / keeping the live bot running
+- The live bot runs **inside this one Node service** (a 20s polling loop), so a normal Railway
+  deploy keeps it alive - but it **stops on redeploy/restart**; just press **Start** again
+  (or we can auto-resume from a saved flag if you want).
+- **Use `DATABASE_URL`** (Railway Postgres) so the config and the `forex_trades` log persist
+  across restarts. Without a DB it's in-memory and resets on redeploy.
+- Forex endpoints: `GET/POST /api/forex/config`, `POST /api/forex/test`,
+  `POST /api/forex/backtest`, `GET /api/forex/trades[.csv]`,
+  `POST /api/forex/live/start|stop`, `GET /api/forex/live`.
+
+### Adding more strategies later
+`forex.js` has a `STRATEGIES` registry - add another `{ name, defaults, evaluate(candles,
+params) }` entry and it shows up in the dropdown automatically. The logging and UI don't
+change.
+
 ## Deploy to Railway (one service, no DB)
 
 1. Create a service from this repo (Dockerfile build; leave Root Directory empty).
