@@ -194,13 +194,43 @@ function renderTrackedFiltered() {
     : '<tbody><tr><td class="py-3 text-slate-500">No closed results for this filter yet.</td></tr></tbody>';
 }
 
+// Explain an empty track record: is it in-memory (reset on redeploy), are any
+// signals currently eligible (≥ threshold), or is the market just quiet?
+function renderTrackDiag(s) {
+  const el = $("track-diag");
+  const hasHistory = (s.tracked || 0) > 0 || (lastTrack.open || []).length || (lastTrack.recent || []).length;
+  if (hasHistory) { el.classList.add("hidden"); return; }
+  const thr = CONFIG.trackMinConfidence ?? 55;
+  const sigs = last.signals || [];
+  const actionable = sigs.filter((x) => x.direction === "LONG" || x.direction === "SHORT");
+  const eligible = actionable.filter((x) => x.confidence >= thr);
+  el.classList.remove("hidden");
+  let tone, msg;
+  if (eligible.length) {
+    tone = "border-sky-500/40 bg-sky-500/10 text-sky-200";
+    msg = `<b>${eligible.length}</b> signal${eligible.length === 1 ? "" : "s"} currently qualify (≥ ${thr}% confidence): ${eligible.slice(0, 6).map((x) => x.symbol).join(", ")}. These get logged automatically within ~${Math.max(3, CONFIG.indicatorRefreshSec || 60)}s and will appear here as <b>open</b> trades — wins/losses show once price reaches a target or stop.`;
+  } else if (actionable.length) {
+    tone = "border-amber-500/40 bg-amber-500/10 text-amber-200";
+    msg = `${actionable.length} setup${actionable.length === 1 ? "" : "s"} are showing, but none has reached the <b>${thr}%</b> confidence needed to be tracked yet. Lower <code>TRACK_MIN_CONFIDENCE</code> to log more, or wait for a stronger trend.`;
+  } else {
+    tone = "border-slate-500/40 bg-slate-500/10 text-slate-300";
+    msg = `No actionable setups right now${CONFIG.source ? " on " + CONFIG.source : ""} — the market may be ranging, so nothing qualifies to track. Check back, or try another timeframe.`;
+  }
+  const durNote = CONFIG.durable
+    ? `<span class="text-emerald-300">History is durable (Postgres).</span>`
+    : `<span class="text-amber-300">Tracking is in-memory — it resets on every redeploy. Set <code>DATABASE_URL</code> (Railway Postgres) to keep your track record.</span>`;
+  el.className = "mb-3 rounded-lg border px-3 py-2 text-xs " + tone;
+  el.innerHTML = `${msg}<div class="mt-1">${durNote}</div>`;
+}
+
 async function loadTrack() {
   try {
     const [s, t] = await Promise.all([api("/api/stats"), api("/api/tracked")]);
+    lastTrack = t;
     renderStats(s);
     renderEta(s);
     renderByTf(s.byTimeframe);
-    lastTrack = t;
+    renderTrackDiag(s);
     renderTrackedFiltered();
   } catch (e) { /* ignore */ }
 }

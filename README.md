@@ -75,7 +75,10 @@ app computes a live **track record** — win rate, TP1/2/3 hit rates, average R 
 dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
 
 - **Durable** when `DATABASE_URL` (Railway Postgres plugin) is set — history survives
-  restarts. Without it, tracking is in-memory and resets on redeploy.
+  restarts. Without it, tracking is in-memory and **resets on every redeploy** (a common
+  reason the Track Record tab looks empty). The tab shows a banner explaining exactly why
+  it's empty — in-memory reset, no signal yet at/above `TRACK_MIN_CONFIDENCE`, or a ranging
+  market — and how many signals currently qualify.
 - A signal is a **WIN** if it reaches ≥ TP1 before the stop, **LOSS** if stopped first,
   **EXPIRED** if entry never fills or it times out (`MAX_WAIT_CANDLES` / `MAX_HOLD_CANDLES`).
 
