@@ -824,7 +824,8 @@ const settings = {
   exitStyle: (process.env.EXIT_STYLE || "tp1").toLowerCase() === "scaleout" ? "scaleout" : "tp1", // tp1 = full profit at TP1 (best when TP1 is the edge); scaleout = ride to TP3
   minTrackLiquidityUsd: Number(process.env.MIN_TRACK_LIQUIDITY_USD || 15e6), // ignore illiquid junk (tokenized stocks, micro-caps)
   tgApproval: /^(1|true|yes|on)$/i.test(process.env.TG_APPROVAL || ""), // ask on Telegram before each trade
-  positionUsd: Number(process.env.POSITION_USD || 20),   // $ you'd put per trade (for the profit projection)
+  positionUsd: Number(process.env.POSITION_USD || 20),   // $ margin you'd put per trade
+  leverage: Number(process.env.LEVERAGE || 20),          // futures leverage used in the profit/loss projection
   capitalUsd: Number(process.env.CAPITAL_USD || 200),    // total capital (context / risk sizing)
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
@@ -1030,7 +1031,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1043,6 +1044,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (b.exitStyle === "tp1" || b.exitStyle === "scaleout") settings.exitStyle = b.exitStyle;
   if (typeof b.tgApproval === "boolean") settings.tgApproval = b.tgApproval;
   if (b.positionUsd != null && Number.isFinite(+b.positionUsd)) settings.positionUsd = Math.max(1, +b.positionUsd);
+  if (b.leverage != null && Number.isFinite(+b.leverage)) settings.leverage = Math.min(125, Math.max(1, +b.leverage));
   if (b.capitalUsd != null && Number.isFinite(+b.capitalUsd)) settings.capitalUsd = Math.max(1, +b.capitalUsd);
   if (b.minTrackLiquidityUsd != null && Number.isFinite(+b.minTrackLiquidityUsd)) settings.minTrackLiquidityUsd = Math.max(0, +b.minTrackLiquidityUsd);
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
@@ -1103,6 +1105,25 @@ const proposals = new Map();  // key symbol|tf|dir -> plan {profit, loss, pos, g
 const approved = new Map();   // approved trades pending a TP1 alert
 const proposedAt = new Map(); // cooldown per key
 const PROPOSE_COOLDOWN = 3 * 3600_000;
+// A clean signal card for Telegram, with 20x-leverage profit/loss projections.
+function fmtSignalCard(s) {
+  const long = s.direction === "LONG";
+  const dot = long ? "🟢" : "🔴";
+  const pos = settings.positionUsd, lev = Math.max(1, settings.leverage), notional = pos * lev;
+  const proj = (pct) => round((notional * pct) / 100, 2); // $ move on the leveraged notional
+  const tvLink = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}${QUOTE}`;
+  const tps = s.targets.map((t, i) => `   *TP${i + 1}*  ${fmtUsd(t.priceUsd)}  (+${t.gainPct}%)  ${t.etaLabel}  →  *+$${proj(t.gainPct)}*`).join("\n");
+  const liqPct = round(100 / lev, 1);
+  return `${dot} *${s.direction}  ${s.symbol}/${QUOTE}*   ·  ${s.tf}\n`
+    + `🔥 High-confidence *${s.confidence}%*  ·  ${s.quality?.tier || "-"}  ·  ${marketRegime.tier}\n\n`
+    + `📍 *Entry Zone*\n   ${fmtUsd(s.entry.low)}  –  ${fmtUsd(s.entry.high)}\n\n`
+    + `🛑 *Stop Loss*\n   ${fmtUsd(s.stop.priceUsd)}  (-${s.stop.riskPct}%)   →  *-$${proj(s.stop.riskPct)}*\n\n`
+    + `🎯 *Targets*  _(profit on $${pos} at ${lev}x = $${notional} notional)_\n${tps}\n\n`
+    + `⏱ ETAs are estimates from recent volatility.\n`
+    + `⚠️ At ${lev}x a ~${liqPct}% move against you = *liquidation*. The stop is set tighter than that.\n\n`
+    + `✅ *Why:* ${(s.reasons || []).slice(0, 4).join(", ")}\n`
+    + `[📈 Open chart](${tvLink})`;
+}
 async function proposeTrade(s) {
   if (!settings.tgApproval || !bot || chats.size === 0) return;
   if (s.direction !== "LONG" && s.direction !== "SHORT") return;
@@ -1110,18 +1131,11 @@ async function proposeTrade(s) {
   const key = `${s.symbol}|${s.tf}|${s.direction}`;
   if (Date.now() - (proposedAt.get(key) || 0) < PROPOSE_COOLDOWN) return;
   proposedAt.set(key, Date.now());
-  const pos = settings.positionUsd;
-  const gain1 = s.targets[0].gainPct, profit = round((pos * gain1) / 100, 2);
-  const riskPct = s.stop.riskPct, loss = round((pos * riskPct) / 100, 2);
-  const tv = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}${QUOTE}`;
-  const text = `🔔 *Trade idea* — *${s.symbol} ${s.direction}*  _(${s.tf})_\n`
-    + `Confidence *${s.confidence}%* · quality ${s.quality?.tier || "-"} · regime ${marketRegime.tier}\n`
-    + `✅ Confirmed by: ${(s.reasons || []).slice(0, 4).join(", ")}\n\n`
-    + `Entry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)}\nStop ${fmtUsd(s.stop.priceUsd)}  ·  TP1 ${fmtUsd(s.targets[0].priceUsd)} (+${gain1}%)\n\n`
-    + `💵 If you put *$${pos}*:\n   • TP1 hit → *+$${profit}* profit\n   • Stop hit → *-$${loss}* loss\n   • Risk:reward ${s.rr?.toTp1 || "1:1"}\n\n`
-    + `[📈 Open chart](${tv})\n\n*Take this trade?*`;
-  const kb = { inline_keyboard: [[{ text: `✅ Take $${pos}`, callback_data: `take|${key}` }, { text: "❌ Skip", callback_data: `skip|${key}` }]] };
-  proposals.set(key, { symbol: s.symbol, tf: s.tf, direction: s.direction, entry: s.entry.mid, tp1: s.targets[0].priceUsd, gain1, pos, profit, loss });
+  const pos = settings.positionUsd, lev = Math.max(1, settings.leverage);
+  const gain1 = s.targets[0].gainPct, profit = round((pos * lev * gain1) / 100, 2), loss = round((pos * lev * s.stop.riskPct) / 100, 2);
+  const text = fmtSignalCard(s) + `\n\n*Take this trade?*`;
+  const kb = { inline_keyboard: [[{ text: `✅ Take $${pos} (${lev}x)`, callback_data: `take|${key}` }, { text: "❌ Skip", callback_data: `skip|${key}` }]] };
+  proposals.set(key, { symbol: s.symbol, tf: s.tf, direction: s.direction, entry: s.entry.mid, tp1: s.targets[0].priceUsd, gain1, pos, lev, profit, loss });
   for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", reply_markup: kb }).catch(() => {});
 }
 async function maybeAlertTp1(row, upd) {
@@ -1133,7 +1147,7 @@ async function maybeAlertTp1(row, upd) {
   a.alerted = true;
   const msg = `🎯 *${row.symbol} ${row.direction}* hit *TP1*!\n`
     + `Entry ${fmtUsd(row.entry_mid)} → TP1 ${fmtUsd(row.tp1)} (+${a.gain1}%)\n`
-    + `💰 On *$${a.pos}* that's *+$${a.profit}* profit. Closed at TP1 as planned. ✅`;
+    + `💰 On *$${a.pos}* at *${a.lev || settings.leverage}x* that's *+$${a.profit}* profit. Closed at TP1 as planned. ✅`;
   bot.sendMessage(a.chatId, msg, { parse_mode: "Markdown" }).catch(() => {});
 }
 function startTelegram() {
@@ -1169,13 +1183,17 @@ function startTelegram() {
 }
 async function signalAlerts() {
   if (!bot || chats.size === 0) return;
+  if (settings.tgApproval) return; // approval mode already sends the (button) cards from the scan loop
   const { signals } = await scanMarket(SIGNAL_TF);
   for (const s of signals) {
-    if (s.error || s.direction === "NEUTRAL" || s.confidence < Math.max(60, MIN_CONFIDENCE)) continue;
+    // Only HIGH-ACCURACY setups (>=95%, same bar as the Track Record) reach Telegram.
+    if (s.error || s.direction === "NEUTRAL" || !s.entry || !s.targets || s.confidence < TRACK_MIN_CONFIDENCE) continue;
+    if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
+    if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") continue;
     const key = `${s.symbol}:${s.direction}`;
     if (Date.now() - (alerted.get(key) || 0) < 6 * 3600_000) continue;
     alerted.set(key, Date.now());
-    for (const id of chats) bot.sendMessage(id, `🚨 *${s.symbol}* ${s.direction} ${s.confidence}%\nEntry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)} · SL ${fmtUsd(s.stop.priceUsd)}\n${s.targets.map((t) => `${t.name} ${fmtUsd(t.priceUsd)} ${t.etaLabel}`).join(", ")}`, { parse_mode: "Markdown" }).catch(() => {});
+    for (const id of chats) bot.sendMessage(id, fmtSignalCard(s), { parse_mode: "Markdown" }).catch(() => {});
   }
 }
 const alerted = new Map();

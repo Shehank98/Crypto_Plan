@@ -703,6 +703,7 @@ async function loadSettings() {
     if (s.exitStyle) $("set-exit").value = s.exitStyle;
     $("set-approval").checked = !!s.tgApproval;
     if (s.positionUsd != null) $("set-position").value = s.positionUsd;
+    if (s.leverage != null) $("set-leverage").value = s.leverage;
     if (s.capitalUsd != null) $("set-capital").value = s.capitalUsd;
     $("set-tg").innerHTML = s.telegramReady
       ? '<span class="text-emerald-400">✓ Telegram connected</span>'
@@ -735,7 +736,7 @@ async function loadTestnetTrades() {
     : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
 }
 async function saveSettings() {
-  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked, regimeFilter: $("set-regime").checked, exitStyle: $("set-exit").value, tgApproval: $("set-approval").checked, positionUsd: Number($("set-position").value) || 20, capitalUsd: Number($("set-capital").value) || 200 };
+  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked, regimeFilter: $("set-regime").checked, exitStyle: $("set-exit").value, tgApproval: $("set-approval").checked, positionUsd: Number($("set-position").value) || 20, leverage: Number($("set-leverage").value) || 20, capitalUsd: Number($("set-capital").value) || 200 };
   const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
   if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";
