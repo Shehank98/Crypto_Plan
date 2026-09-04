@@ -216,8 +216,10 @@ function renderTrackDiag(s) {
     tone = "border-slate-500/40 bg-slate-500/10 text-slate-300";
     msg = `No actionable setups right now${CONFIG.source ? " on " + CONFIG.source : ""} — the market may be ranging, so nothing qualifies to track. Check back, or try another timeframe.`;
   }
-  const durNote = CONFIG.durable
-    ? `<span class="text-emerald-300">History is durable (Postgres).</span>`
+  const durNote = CONFIG.dbError
+    ? `<span class="text-rose-300">⚠ Database connection failed — using in-memory tracking. (${CONFIG.dbError}) Check that <code>DATABASE_URL</code> is set to the Railway Postgres reference.</span>`
+    : CONFIG.durable
+    ? `<span class="text-emerald-300">History is durable (Postgres) — it survives redeploys.</span>`
     : `<span class="text-amber-300">Tracking is in-memory — it resets on every redeploy. Set <code>DATABASE_URL</code> (Railway Postgres) to keep your track record.</span>`;
   el.className = "mb-3 rounded-lg border px-3 py-2 text-xs " + tone;
   el.innerHTML = `${msg}<div class="mt-1">${durNote}</div>`;

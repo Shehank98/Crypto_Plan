@@ -386,32 +386,47 @@ async function scanMarket(tf, force) {
 // ===========================================================================
 // Signal tracking store (Postgres if DATABASE_URL, else in-memory)
 // ===========================================================================
-const useDb = !!process.env.DATABASE_URL;
+let useDb = !!process.env.DATABASE_URL;
 let pool = null;
+let dbError = null;
 const mem = [];
 let memId = 1;
 
 if (useDb) {
   const { Pool } = require("pg");
-  pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? false : { rejectUnauthorized: false } });
+  const url = process.env.DATABASE_URL;
+  // Railway's internal host (postgres.railway.internal) and localhost do NOT speak
+  // SSL — forcing it there throws "server does not support SSL connections", which
+  // silently breaks all tracking. Only enable SSL for external/proxied hosts.
+  const noSsl = /localhost|127\.0\.0\.1|::1|\.railway\.internal|\.internal(?::\d+)?\/|sslmode=disable/.test(url);
+  pool = new Pool({ connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false } });
+  pool.on("error", (e) => console.warn("[store] pool error:", e.message));
 }
 
 async function initStore() {
   if (!useDb) { console.log("[store] in-memory (set DATABASE_URL to persist across restarts)"); return; }
-  await pool.query(`CREATE TABLE IF NOT EXISTS tracked_signals (
-    id SERIAL PRIMARY KEY, symbol VARCHAR(20), tf VARCHAR(5), direction VARCHAR(5), confidence INT,
-    entry_low DOUBLE PRECISION, entry_high DOUBLE PRECISION, entry_mid DOUBLE PRECISION, stop DOUBLE PRECISION,
-    tp1 DOUBLE PRECISION, tp2 DOUBLE PRECISION, tp3 DOUBLE PRECISION,
-    status VARCHAR(10) DEFAULT 'WAITING', tp1_hit BOOLEAN DEFAULT false, tp2_hit BOOLEAN DEFAULT false, tp3_hit BOOLEAN DEFAULT false,
-    result_r DOUBLE PRECISION, note TEXT,
-    eta1_min DOUBLE PRECISION, eta2_min DOUBLE PRECISION, eta3_min DOUBLE PRECISION,
-    tp1_at TIMESTAMPTZ, tp2_at TIMESTAMPTZ, tp3_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW(), entered_at TIMESTAMPTZ, closed_at TIMESTAMPTZ )`);
-  // Backfill columns on databases created before ETA tracking existed.
-  for (const col of ["eta1_min DOUBLE PRECISION", "eta2_min DOUBLE PRECISION", "eta3_min DOUBLE PRECISION", "tp1_at TIMESTAMPTZ", "tp2_at TIMESTAMPTZ", "tp3_at TIMESTAMPTZ"]) {
-    await pool.query(`ALTER TABLE tracked_signals ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS tracked_signals (
+      id SERIAL PRIMARY KEY, symbol VARCHAR(20), tf VARCHAR(5), direction VARCHAR(5), confidence INT,
+      entry_low DOUBLE PRECISION, entry_high DOUBLE PRECISION, entry_mid DOUBLE PRECISION, stop DOUBLE PRECISION,
+      tp1 DOUBLE PRECISION, tp2 DOUBLE PRECISION, tp3 DOUBLE PRECISION,
+      status VARCHAR(10) DEFAULT 'WAITING', tp1_hit BOOLEAN DEFAULT false, tp2_hit BOOLEAN DEFAULT false, tp3_hit BOOLEAN DEFAULT false,
+      result_r DOUBLE PRECISION, note TEXT,
+      eta1_min DOUBLE PRECISION, eta2_min DOUBLE PRECISION, eta3_min DOUBLE PRECISION,
+      tp1_at TIMESTAMPTZ, tp2_at TIMESTAMPTZ, tp3_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(), entered_at TIMESTAMPTZ, closed_at TIMESTAMPTZ )`);
+    // Backfill columns on databases created before ETA tracking existed.
+    for (const col of ["eta1_min DOUBLE PRECISION", "eta2_min DOUBLE PRECISION", "eta3_min DOUBLE PRECISION", "tp1_at TIMESTAMPTZ", "tp2_at TIMESTAMPTZ", "tp3_at TIMESTAMPTZ"]) {
+      await pool.query(`ALTER TABLE tracked_signals ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+    }
+    await pool.query("SELECT 1");
+    console.log("[store] Postgres ready (durable tracking)");
+  } catch (e) {
+    // Don't let a bad DB blank the whole app — fall back to in-memory and surface why.
+    dbError = e.message;
+    useDb = false;
+    console.error("[store] Postgres unavailable — falling back to in-memory tracking:", e.message);
   }
-  console.log("[store] Postgres ready (durable tracking)");
 }
 
 const store = {
@@ -565,8 +580,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => { console.error("[api]", e.message); res.status(e.statusCode || 500).json({ error: e.message }); });
 
-app.get("/api/health", (_req, res) => res.json({ status: "ok", source: ACTIVE?.name || null }));
-app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, trackMinConfidence: TRACK_MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, scanIntervalSec: SCAN_INTERVAL_SEC, indicatorRefreshSec: INDICATOR_REFRESH_SEC }));
+app.get("/api/health", (_req, res) => res.json({ status: "ok", source: ACTIVE?.name || null, durable: useDb, dbError }));
+app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, trackMinConfidence: TRACK_MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, dbError, scanIntervalSec: SCAN_INTERVAL_SEC, indicatorRefreshSec: INDICATOR_REFRESH_SEC }));
 
 app.get("/api/signals", wrap(async (req, res) => {
   const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
