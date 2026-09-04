@@ -116,8 +116,10 @@ dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
 
 ## Backtest — did these rules actually work?
 
-Click **⏮ Backtest** on any chart (or call `GET /api/backtest/:symbol?tf=1h`) to
-**replay the exact signal rules over historical candles** for that coin+timeframe. It
+Click **⏮ Test** on any signal card (or **⏮ Backtest** inside its chart, or call
+`GET /api/backtest/:symbol?tf=1h`) to **replay the exact signal rules over historical
+candles** for that coin+timeframe. The card shows a compact win-rate/avg-R line; the chart
+shows the full breakdown. It
 walks the history bar by bar, and for every non-NEUTRAL signal simulates the trade forward
 using each future candle's high/low (pessimistic: a bar that touches both stop and target
 counts the stop). You get:

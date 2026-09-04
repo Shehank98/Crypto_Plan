@@ -10,6 +10,7 @@ let tf = "1h";
 let filter = "actionable"; // actionable | LONG | SHORT | all
 let search = "";
 let last = { signals: [] };
+const btCache = {}; // per-card backtest results, keyed by SYMBOL|tf, so the 5s refresh keeps them
 
 const $ = (id) => document.getElementById(id);
 const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
@@ -52,6 +53,13 @@ function card(s) {
   const ind = s.indicators || {};
   const chips = (s.reasons || []).slice(0, 3).map((r) => `<span class="pill bg-slate-800 text-slate-400">${r}</span>`).join(" ");
   const chartBtn = `<button data-chart="${s.symbol}" data-tf="${s.tf}" class="rounded-md border border-edge bg-panel px-2 py-1 text-xs text-slate-300 hover:bg-edge">📈 Chart</button>`;
+  const btBtn = `<button data-backtest="${s.symbol}" data-tf="${s.tf}" class="rounded-md border border-edge bg-panel px-2 py-1 text-xs text-slate-300 hover:bg-edge">⏮ Test</button>`;
+  const bt = btCache[s.symbol + "|" + s.tf];
+  const btRow = bt
+    ? (bt.error
+        ? `<p class="mt-2 text-[11px] text-slate-500">Backtest: ${bt.error}</p>`
+        : `<p class="mt-2 rounded border border-edge bg-ink/50 px-2 py-1 text-[11px] text-slate-400">Backtest (${bt.bars} bars): Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "—"}%</b> · ${bt.trades} trades · TP1 ${bt.tp1RatePct ?? "—"}% · TP2 ${bt.tp2RatePct ?? "—"}% · Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "—"}R</b></p>`)
+    : "";
   const head = `<div class="flex items-center justify-between">
       <span class="text-base font-bold" style="color:${coinColor(s.symbol)}">${s.symbol}<span class="ml-1 text-xs font-normal text-slate-500">${s.tf}${s.changePct != null ? ` · ${s.changePct > 0 ? "+" : ""}${s.changePct}%/24h` : ""}</span></span>
       <span class="pill border ${d.cls}">${s.direction} ${s.confidence}%</span>
@@ -60,7 +68,7 @@ function card(s) {
     <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · ADX ${ind.adx ?? "—"} · StochRSI ${ind.stochRsi ?? "—"} · MFI ${ind.mfi ?? "—"}</p>`;
 
   if (s.direction === "NEUTRAL" || !s.entry) {
-    return `<div class="card p-4">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div>${chartBtn}</div></div>`;
+    return `<div class="card p-4">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div><div class="flex gap-1">${btBtn}${chartBtn}</div></div>${btRow}</div>`;
   }
   const readyCls = s.entry.status === "READY" ? "text-emerald-300" : "text-amber-300";
   const tps = s.targets.map((t) => `<div class="flex items-center justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums"><span class="text-emerald-400">+${t.gainPct}%</span> · ${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("");
@@ -73,7 +81,8 @@ function card(s) {
       <div class="flex justify-between text-sm"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${usd(s.stop.priceUsd)} <span class="text-slate-500">-${s.stop.riskPct}%</span></span></div>
       <div class="my-1 border-t border-edge"></div>${tps}
     </div>
-    <div class="mt-2 flex items-center justify-between gap-2"><div class="flex flex-wrap gap-1">${chips}</div>${chartBtn}</div>
+    <div class="mt-2 flex items-center justify-between gap-2"><div class="flex flex-wrap gap-1">${chips}</div><div class="flex gap-1">${btBtn}${chartBtn}</div></div>
+    ${btRow}
     <p class="mt-2 text-[11px] text-slate-500">${s.invalidation || ""}</p>
   </div>`;
 }
@@ -85,6 +94,13 @@ function render() {
   if (search) list = list.filter((s) => s.symbol.includes(search.toUpperCase()));
   $("signals").innerHTML = list.map(card).join("");
   $("signals").querySelectorAll("[data-chart]").forEach((b) => (b.onclick = () => openChart(b.dataset.chart, b.dataset.tf)));
+  $("signals").querySelectorAll("[data-backtest]").forEach((b) => (b.onclick = async () => {
+    const sym = b.dataset.backtest, tfv = b.dataset.tf, key = sym + "|" + tfv;
+    b.textContent = "…"; b.disabled = true;
+    try { const r = await api(`/api/backtest/${sym}?tf=${encodeURIComponent(tfv)}`); btCache[key] = r; }
+    catch (e) { btCache[key] = { error: e.message }; }
+    render();
+  }));
   const empty = $("empty");
   if (!list.length) {
     empty.classList.remove("hidden");
