@@ -82,10 +82,17 @@ exchange. USD→LKR from open.er-api.com (display only).
 
 ## Signal outcome tracking (trust)
 
-Every high-confidence signal (≥ `TRACK_MIN_CONFIDENCE`) is **logged and then monitored every
-minute**: did price reach the entry zone, then TP1 / TP2 / TP3, or the stop? From that the
-app computes a live **track record** — win rate, TP1/2/3 hit rates, average R — shown on the
-dashboard, via `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
+Only **very-high-conviction** signals (≥ `TRACK_MIN_CONFIDENCE`, default **95%**) are
+**logged and then monitored every minute**: did price reach the entry zone, then TP1 / TP2 /
+TP3, or the stop? Lower-conviction setups still show on the Signals tab but are **not** tracked,
+so the record reflects only the trades you'd actually take. From that the app computes a live
+**track record** — win rate, TP1/2/3 hit rates, average R — shown on the dashboard, via
+`GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
+
+**Click any live/closed trade** for a **target ladder**: Entry → TP1 → TP2 → TP3, each step
+showing the **% move** (from entry and from the previous TP), its **R multiple**, the
+**estimated time** for that leg, the **actual** time once hit, and — while live — **how much
+time is left** to the next target. So you know exactly how long to wait for each TP.
 
 - **Durable** when `DATABASE_URL` (Railway Postgres plugin) is set — history survives
   restarts. Without it, tracking is in-memory and **resets on every redeploy** (a common

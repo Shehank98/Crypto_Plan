@@ -29,7 +29,7 @@ const UNIVERSE_SIZE = Number(process.env.UNIVERSE_SIZE || 60);
 const SIGNAL_TF = process.env.SIGNAL_TF || "1h";
 const TIMEFRAMES = ["15m", "1h", "4h", "1d"]; // 5m dropped (too noisy); 1d added for higher-TF confirmation
 const MIN_CONFIDENCE = Number(process.env.SIGNAL_MIN_CONFIDENCE || 45);
-const TRACK_MIN_CONFIDENCE = Number(process.env.TRACK_MIN_CONFIDENCE || 55);
+const TRACK_MIN_CONFIDENCE = Number(process.env.TRACK_MIN_CONFIDENCE || 95); // only track very-high-conviction setups
 const SCAN_INTERVAL_SEC = Math.max(3, Number(process.env.SCAN_INTERVAL_SEC || 5)); // live price/monitor tick
 const INDICATOR_REFRESH_SEC = Math.max(15, Number(process.env.INDICATOR_REFRESH_SEC || 60)); // heavy indicator rescan
 const FALLBACK_USD_LKR = Number(process.env.FALLBACK_USD_LKR || 300);
@@ -626,7 +626,8 @@ async function openFrom(data) {
 }
 
 async function computeStats() {
-  const all = await store.recent(2000);
+  // Only high-conviction, currently-scanned setups count toward the record.
+  const all = (await store.recent(2000)).filter((t) => TIMEFRAMES.includes(t.tf) && (t.confidence == null || t.confidence >= TRACK_MIN_CONFIDENCE));
   const closed = all.filter((t) => t.status === "WIN" || t.status === "LOSS" || t.status === "EXPIRED");
   const decided = closed.filter((t) => t.status === "WIN" || t.status === "LOSS");
   const wins = decided.filter((t) => t.status === "WIN").length;
@@ -756,7 +757,8 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
-  const rows = (await store.recent(120)).filter((t) => TIMEFRAMES.includes(t.tf)); // hide retired TFs (5m)
+  // Only high-conviction, currently-scanned setups appear in the track record.
+  const rows = (await store.recent(200)).filter((t) => TIMEFRAMES.includes(t.tf) && (t.confidence == null || t.confidence >= TRACK_MIN_CONFIDENCE));
   const withLive = rows.map((t) => {
     const P = prices.get(t.symbol);
     let rr = null;

@@ -188,7 +188,7 @@ function renderTrackedFiltered() {
   const open = trackFilter(lastTrack.open);
   const recent = trackFilter(lastTrack.recent);
 
-  const openRows = open.map((x) => {
+  const openRows = open.map((x, i) => {
     const long = x.direction === "LONG";
     const gain = movePct(x.entry_mid, x.currentPrice, long);        // current gain %
     const toTp1 = movePct(x.currentPrice, x.tp1, long);             // % still needed to TP1
@@ -201,7 +201,7 @@ function renderTrackedFiltered() {
     } else {
       etaCell = `<span class="text-slate-300">~${etaClock(startedAt, x.eta1_min)}</span><br><span class="text-slate-500">in ${fmtDur(x.eta1_min)}</span>`;
     }
-    return `<tr class="border-b border-edge/60">
+    return `<tr class="cursor-pointer border-b border-edge/60 hover:bg-edge/30" data-trade="open:${i}" title="Click for the full trade plan & timing">
       <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
       <td class="py-2">${tfPill(x.tf)}</td>
       <td class="py-2"><span class="pill ${long ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
@@ -223,7 +223,7 @@ function renderTrackedFiltered() {
     ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Status</th><th class="text-right">Entry</th><th>Entered (SL)</th><th>Est → TP1</th><th class="text-right">Gain</th><th class="text-right">Open R</th><th>Progress → TP1</th></tr></thead><tbody>${openRows}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No open tracked signals for this filter. High-confidence setups are logged automatically.</td></tr></tbody>';
 
-  const recRows = recent.map((x) => {
+  const recRows = recent.map((x, i) => {
     const long = x.direction === "LONG";
     const riskPct = x.entry_mid && x.stop ? Math.abs(x.entry_mid - x.stop) / x.entry_mid * 100 : null;
     const gainPct = x.result_r != null && riskPct != null ? round(x.result_r * riskPct, 2) : null;
@@ -240,7 +240,7 @@ function renderTrackedFiltered() {
     } else {
       evaCell = `<span class="text-slate-600">— no TP1</span>`;
     }
-    return `<tr class="border-b border-edge/60">
+    return `<tr class="cursor-pointer border-b border-edge/60 hover:bg-edge/30" data-trade="recent:${i}" title="Click for the full trade plan & timing">
       <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
       <td class="py-2">${tfPill(x.tf)}</td>
       <td class="py-2"><span class="pill ${long ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
@@ -256,6 +256,76 @@ function renderTrackedFiltered() {
   $("recent-table").innerHTML = recent.length
     ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th class="text-right">Entry</th><th>Entered (SL)</th><th>Result</th><th>Est vs Actual → TP1</th><th class="text-right">Gain</th><th class="text-right">R</th><th class="text-right">Closed (SL)</th></tr></thead><tbody>${recRows}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No closed results for this filter yet.</td></tr></tbody>';
+  // Row click -> full per-trade plan & timing.
+  document.querySelectorAll("#open-table [data-trade], #recent-table [data-trade]").forEach((tr) => (tr.onclick = () => {
+    const [k, i] = tr.dataset.trade.split(":");
+    const row = (k === "open" ? open : recent)[+i];
+    if (row) openTradeAnalysis(row);
+  }));
+}
+
+// Per-trade "ladder": entry -> TP1 -> TP2 -> TP3, each with the % move and the
+// estimated time for that leg, actual times once hit, and time left to the next TP.
+function openTradeAnalysis(x) {
+  const m = $("trade-modal"); m.classList.remove("hidden"); m.classList.add("flex");
+  const long = x.direction === "LONG";
+  $("trade-title").innerHTML = `<span style="color:${coinColor(x.symbol)}">${x.symbol}</span> · ${x.tf} · ${DIRPILL(x.direction)} — trade plan`;
+  const riskPct = x.entry_mid && x.stop ? round(Math.abs(x.entry_mid - x.stop) / x.entry_mid * 100, 2) : null;
+  const startedAt = x.entered_at || x.created_at;
+  const live = x.status === "ACTIVE" || x.status === "WAITING";
+  const nowMin = startedAt ? minsBetween(startedAt, new Date().toISOString()) : null;
+  const tps = [
+    { k: 1, price: x.tp1, hit: x.tp1_hit, at: x.tp1_at, cum: Number(x.eta1_min), prev: x.entry_mid, prevAt: x.entered_at, prevLabel: "entry" },
+    { k: 2, price: x.tp2, hit: x.tp2_hit, at: x.tp2_at, cum: Number(x.eta2_min), prev: x.tp1, prevAt: x.tp1_at, prevLabel: "TP1" },
+    { k: 3, price: x.tp3, hit: x.tp3_hit, at: x.tp3_at, cum: Number(x.eta3_min), prev: x.tp2, prevAt: x.tp2_at, prevLabel: "TP2" },
+  ];
+  const nextK = (tps.find((t) => !t.hit) || {}).k || null;
+  let prevCum = 0;
+  const steps = tps.map((t) => {
+    const legEst = (Number.isFinite(t.cum) ? t.cum : prevCum) - prevCum;
+    const fromEntry = movePct(x.entry_mid, t.price, long);
+    const fromPrev = movePct(t.prev, t.price, long);
+    let statusHtml, timeHtml;
+    if (t.hit && t.at) {
+      const legAct = minsBetween(t.prevAt, t.at);
+      statusHtml = `<span class="text-emerald-400">✅ hit ${slTime(t.at)}</span>`;
+      timeHtml = `est ${fmtDur(t.cum)} from entry${legAct != null ? ` · took ${fmtDur(legAct)} this leg` : ""}`;
+    } else {
+      const remaining = Number.isFinite(t.cum) && nowMin != null ? Math.max(0, t.cum - nowMin) : null;
+      statusHtml = t.k === nextK ? `<span class="text-sky-400">⏳ next target</span>` : `<span class="text-slate-500">pending</span>`;
+      timeHtml = Number.isFinite(t.cum) ? `est ${fmtDur(t.cum)} from entry${live && remaining != null ? ` · ~${fmtDur(remaining)} left` : ""}` : "—";
+    }
+    const border = t.hit ? "border-emerald-500" : t.k === nextK ? "border-sky-500" : "border-edge";
+    const html = `<div class="border-l-2 ${border} pl-3 pb-3">
+      <div class="text-sm font-semibold text-slate-200">TP${t.k} <span class="text-xs text-slate-500">${t.k}R</span> · ${usd(t.price)}</div>
+      <div class="text-xs text-slate-400">+${fromEntry}% from entry · +${fromPrev}% from ${t.prevLabel} · this leg ≈ ${fmtDur(legEst)}</div>
+      <div class="text-xs">${statusHtml} <span class="text-slate-500">${timeHtml}</span></div>
+    </div>`;
+    prevCum = Number.isFinite(t.cum) ? t.cum : prevCum;
+    return html;
+  }).join("");
+  const curGain = movePct(x.entry_mid, x.currentPrice, long);
+  const nextT = tps.find((t) => t.k === nextK);
+  const nextLeft = nextT && Number.isFinite(nextT.cum) && nowMin != null ? Math.max(0, nextT.cum - nowMin) : null;
+  const box = (label, val, cls) => `<div><div class="text-[11px] uppercase text-slate-500">${label}</div><div class="text-sm ${cls || "text-slate-200"}">${val}</div></div>`;
+  const rightNow = live
+    ? `<div class="mb-3 grid grid-cols-2 gap-3 rounded-lg border border-edge bg-ink/50 p-3 sm:grid-cols-5">
+        ${box("Now", usd(x.currentPrice))}
+        ${box("Gain", curGain != null ? (curGain > 0 ? "+" : "") + curGain + "%" : "—", curGain > 0 ? "text-emerald-400" : curGain < 0 ? "text-rose-400" : "")}
+        ${box("Open R", x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "—", x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "")}
+        ${box("In trade", nowMin != null ? fmtDur(nowMin) : "—")}
+        ${box(nextK ? `Est. to TP${nextK}` : "Status", nextK ? (nextLeft != null ? "~" + fmtDur(nextLeft) : "—") : x.status, "text-sky-300")}
+      </div>`
+    : `<div class="mb-3 rounded-lg border border-edge bg-ink/50 p-3 text-sm">Closed: <b class="${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : ""}">${x.status}${x.result_r != null ? " " + (x.result_r > 0 ? "+" : "") + x.result_r + "R" : ""}</b> · ${slTime(x.closed_at)}</div>`;
+  const entryBlock = `<div class="mb-3 rounded-lg border border-edge bg-ink/50 p-3 text-sm">
+    <div class="flex justify-between py-0.5"><span class="text-slate-400">▶ Entry</span><span class="tabular-nums text-slate-100">${usd(x.entry_mid)} <span class="text-xs text-slate-500">${x.entered_at ? "entered " + slTime(x.entered_at) : "logged " + slTime(x.created_at)}</span></span></div>
+    <div class="flex justify-between py-0.5"><span class="text-rose-400">■ Stop</span><span class="tabular-nums text-rose-300">${usd(x.stop)}${riskPct != null ? ` (-${riskPct}%)` : ""}</span></div>
+    <div class="flex justify-between py-0.5"><span class="text-slate-400">Confidence</span><span class="text-slate-200">${x.confidence != null ? x.confidence + "%" : "—"}</span></div>
+  </div>`;
+  $("trade-body").innerHTML = `${rightNow}${entryBlock}
+    <h4 class="mb-2 text-sm font-semibold text-slate-300">Target ladder — how far & how long to each TP</h4>
+    <div>${steps}</div>
+    <p class="mt-2 text-[11px] text-slate-500">Each TP is 1R/2R/3R off your risk. Times are ATR-based estimates in Sri Lanka time; "~left" counts down from your entry estimate.</p>`;
 }
 
 // Explain an empty track record: is it in-memory (reset on redeploy), are any
@@ -548,6 +618,8 @@ async function init() {
   $("chart-modal").onclick = (e) => { if (e.target.id === "chart-modal") closeChart(); };
   $("an-close").onclick = closeAnalysis;
   $("analysis-modal").onclick = (e) => { if (e.target.id === "analysis-modal") closeAnalysis(); };
+  $("trade-close").onclick = () => { const m = $("trade-modal"); m.classList.add("hidden"); m.classList.remove("flex"); };
+  $("trade-modal").onclick = (e) => { if (e.target.id === "trade-modal") { const m = $("trade-modal"); m.classList.add("hidden"); m.classList.remove("flex"); } };
   await load();
   const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live signals auto-refresh
   setInterval(load, ms);
