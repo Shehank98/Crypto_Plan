@@ -10,7 +10,23 @@ let tf = "1h";
 let filter = "actionable"; // actionable | LONG | SHORT | all
 let search = "";
 let last = { signals: [] };
+let REGIME = null; // market regime (BTC + breadth); gates longs
 const btCache = {}; // per-card backtest results, keyed by SYMBOL|tf, so the 5s refresh keeps them
+
+function renderRegime(r) {
+  REGIME = r || null;
+  const el = $("regime-banner");
+  if (!r || !r.tier) { el.classList.add("hidden"); return; }
+  const map = {
+    RISK_ON: { cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200", txt: "🟢 Risk-ON - market broadly bullish, longs favored" },
+    NEUTRAL: { cls: "border-slate-500/40 bg-slate-500/10 text-slate-300", txt: "⚪ Neutral - mixed market, be selective" },
+    RISK_OFF: { cls: "border-rose-500/40 bg-rose-500/10 text-rose-200", txt: "🔴 Risk-OFF - BTC weak / broad selling. New longs are risky; auto-trade is paused" },
+  };
+  const m = map[r.tier] || map.NEUTRAL;
+  el.className = "mb-3 rounded-lg border px-3 py-2 text-xs " + m.cls;
+  el.innerHTML = `<b>${m.txt}</b> · <span class="opacity-80">BTC ${r.btc} · breadth ${r.breadthPct ?? "?"}% long (${r.longs}/${r.total})</span>`;
+  el.classList.remove("hidden");
+}
 
 const $ = (id) => document.getElementById(id);
 const round = (n, d = 2) => (Number.isFinite(n) ? Number(n.toFixed(d)) : null);
@@ -559,6 +575,12 @@ async function openAnalysis(sym, tfv) {
       ${s.rr ? `<div class="mt-2 flex flex-wrap gap-2 text-xs"><span class="pill bg-slate-800">Risk ${s.rr.riskPct}% to stop</span><span class="pill bg-slate-800 text-emerald-300">Plan R:R - TP1 ${s.rr.toTp1}</span><span class="pill bg-slate-800 text-emerald-300">TP2 ${s.rr.toTp2}</span><span class="pill bg-slate-800 text-emerald-300">TP3 ${s.rr.toTp3}</span></div>${e.rrNow != null && (e.window === "CHASE" || e.window === "CLOSED") ? `<p class="mt-1 text-[11px] text-amber-400">Buying at market right now is only ${e.rrNow}:1 - wait for a pullback toward ${usd(e.mid)} to get the full plan R:R.</p>` : `<p class="mt-1 text-[11px] text-slate-500">Best entry is a limit near ${usd(e.mid)} (the pullback), which gives the full 1:1 / 2:1 / 3:1.</p>`}` : ""}
     </div>` : "";
   // Fibonacci levels
+  const exitBlock = (s.exitPlan && s.exitPlan.length) ? `
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">🎯 Exit plan (scale out - lock profit early)</h4>
+    <div class="mb-4 rounded-lg border border-edge bg-ink/50 p-3 text-xs">
+      ${s.exitPlan.map((p) => `<div class="flex gap-2 border-b border-edge/40 py-1 last:border-0"><b class="w-10 text-emerald-300">${p.at}</b><b class="w-20 text-slate-200">${p.action}</b><span class="text-slate-400">${p.note}</span></div>`).join("")}
+      <p class="mt-2 text-[11px] text-slate-500">Once TP1 hits and the stop is at break-even, the trade <b class="text-emerald-300">can't lose</b> - worst case is a scratch, best case a full ~+1.75R.</p>
+    </div>` : "";
   const fibBlock = s.fib ? `
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Fibonacci (swing ${usd(s.fib.swingLow)} - ${usd(s.fib.swingHigh)})</h4>
     <div class="mb-4 overflow-x-auto"><table class="w-full text-xs"><tbody>
@@ -595,6 +617,7 @@ async function openAnalysis(sym, tfv) {
       </div>
     </div>
 
+    ${exitBlock}
     ${fibBlock}
     <h4 class="mb-1 text-sm font-semibold text-slate-300">Candlestick patterns (latest bar)</h4>
     <div class="mb-4 flex flex-wrap gap-1">${pats}</div>
@@ -619,6 +642,7 @@ async function load() {
     last = data;
     $("updated").innerHTML = data.generatedAt ? `<span class="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400 align-middle"></span>LIVE · every ${Math.max(3, CONFIG.scanIntervalSec || 5)}s · ${new Date(data.generatedAt).toLocaleTimeString()}` : "";
     $("summary").textContent = `${data.actionable} setups · scanned ${data.universe} coins · ${tf}${data.source ? " · " + data.source : ""}`;
+    renderRegime(data.regime);
     render();
   } catch (e) {
     $("empty").classList.remove("hidden");
@@ -673,6 +697,7 @@ async function loadSettings() {
     $("set-auto").checked = !!s.autoTrade;
     $("set-quality").checked = !!s.qualityOnly;
     $("set-hold").checked = !!s.holdThroughDips;
+    $("set-regime").checked = !!s.regimeFilter;
     $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
     $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
     let note = "";
@@ -701,7 +726,7 @@ async function loadTestnetTrades() {
     : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
 }
 async function saveSettings() {
-  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked };
+  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked, regimeFilter: $("set-regime").checked };
   const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
   if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";

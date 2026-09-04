@@ -30,6 +30,16 @@ libraries).
 3. **Trade plan:** entry zone around the EMA20/VWAP pullback, stop beyond the recent swing
    (± ATR), TP1/2/3 at 1R/2R/3R, ETA from ATR velocity, and a drift+ATR price forecast.
 
+**Scale-out exits (so a winner rarely turns into a loser):** the tracker and backtest bank
+**50% at TP1, 25% at TP2, 25% at TP3**, and trail the stop to **break-even after TP1** (then to
+TP1 after TP2). Once TP1 hits the trade **can't lose** - worst case is a scratch, a full run
+banks about **+1.75R**. The exit plan is shown in each signal's analysis.
+
+**Market regime (don't fight BTC):** a top-of-page banner reads **Risk-ON / Neutral / Risk-OFF**
+from **BTC's trend + market breadth** (how many coins are trending up). When it's **risk-off**,
+auto-buys are paused - the ones that fail are usually longs taken while the whole market is
+selling. `GET /api/regime` exposes it; toggle enforcement in Settings.
+
 **Coin quality (stability):** every coin is rated **Blue-chip / Solid / Moderate / Speculative**
 from its **24h liquidity** (USDT volume) and **volatility** (ATR% per candle) - the more
 BTC/ETH-like (deep liquidity, low volatility), the higher the tier. A **⭐ Quality** filter shows

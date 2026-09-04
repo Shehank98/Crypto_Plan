@@ -35,6 +35,7 @@
 
     <!-- SIGNALS TAB -->
     <div id="tab-signals">
+      <div id="regime-banner" class="mb-3 hidden rounded-lg border px-3 py-2 text-xs"></div>
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <div id="tf-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
         <div id="filter-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
@@ -92,6 +93,7 @@
           <div class="mb-3 space-y-2">
             <label class="flex items-center gap-2 text-sm text-slate-300"><input id="set-quality" type="checkbox" class="h-4 w-4" /> Only trade <b>high-quality</b> coins (Blue-chip / Solid) - like BTC / ETH</label>
             <label class="flex items-center gap-2 text-sm text-slate-300"><input id="set-hold" type="checkbox" class="h-4 w-4" /> <b>Hold through dips</b> - no stop, ride a sideways spot until TP1</label>
+            <label class="flex items-center gap-2 text-sm text-slate-300"><input id="set-regime" type="checkbox" class="h-4 w-4" /> <b>Respect market regime</b> - pause auto-buys when BTC / breadth is risk-off</label>
           </div>
           <div class="flex flex-wrap gap-2">
             <button id="set-save" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">Save</button>

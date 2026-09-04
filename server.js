@@ -410,7 +410,13 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   if (opts.htfDir && opts.htfDir !== direction && opts.htfDir !== "NEUTRAL") discipline.push(`Higher timeframe (${opts.htf}) disagrees - reduce size or skip; trade with the bigger trend.`);
 
   const rr = { toTp1: `${targets[0].rr}:1`, toTp2: `${targets[1].rr}:1`, toTp3: `${targets[2].rr}:1`, riskPct };
-  return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, window, rrNow, enterMsg, inGolden, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, rr, fib, discipline, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
+  // Scale-out exit plan: bank profit early, then it can't lose (break-even stop).
+  const exitPlan = [
+    { at: "TP1", action: "Sell 50%", note: "Move stop to break-even - the trade is now risk-free." },
+    { at: "TP2", action: "Sell 25%", note: "Trail the stop up to TP1 to lock more in." },
+    { at: "TP3", action: "Sell last 25%", note: "Full run banks about +1.75R blended." },
+  ];
+  return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, window, rrNow, enterMsg, inGolden, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, rr, exitPlan, fib, discipline, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
 }
 
 async function signalFor(base, tf, fx, opts = {}) {
@@ -454,16 +460,18 @@ async function backtest(base, tf, bars, preloaded) {
         else if (j - i > MAX_WAIT_CANDLES) { outcome = { status: "EXPIRED", r: 0 }; break; }
         if (!entered) continue;
       }
-      const hitStop = long ? lo <= stop : hi >= stop;
-      if (hitStop && !tp1) { outcome = { status: "LOSS", r: -1 }; break; }
+      // Scale-out: stop trails to break-even after TP1, to TP1 after TP2 (check
+      // pessimistically against the level set by already-confirmed TPs).
+      const effStop = tp2 ? tp[0] : tp1 ? eMid : stop;
+      const hitStop = long ? lo <= effStop : hi >= effStop;
+      if (hitStop) { const rr = !tp1 ? -1 : !tp2 ? 0.5 : 1.25; outcome = { status: tp1 ? "WIN" : "LOSS", r: rr, tp1, tp2 }; break; }
       if (long ? hi >= tp[0] : lo <= tp[0]) tp1 = true;
       if (long ? hi >= tp[1] : lo <= tp[1]) tp2 = true;
-      if (long ? hi >= tp[2] : lo <= tp[2]) { outcome = { status: "WIN", r: 3, tp1: true, tp2: true, tp3: true }; break; }
-      if (hitStop && tp1) { outcome = { status: "WIN", r: tp2 ? 2 : 1, tp1: true, tp2 }; break; }
-      if (j - enterBar > MAX_HOLD_CANDLES) { outcome = { status: tp1 ? "WIN" : "EXPIRED", r: tp1 ? (tp2 ? 2 : 1) : 0, tp1, tp2 }; break; }
+      if (long ? hi >= tp[2] : lo <= tp[2]) { outcome = { status: "WIN", r: 1.75, tp1: true, tp2: true, tp3: true }; break; }
+      if (j - enterBar > MAX_HOLD_CANDLES) { outcome = { status: tp1 ? "WIN" : "EXPIRED", r: tp2 ? 1.25 : tp1 ? 0.5 : 0, tp1, tp2 }; break; }
     }
     if (!outcome) break; // ran out of data
-    trades.push({ dir: sig.direction, ...outcome, tp1: outcome.tp1 || tp1, tp2: outcome.tp2 || tp2 });
+    trades.push({ dir: sig.direction, ...outcome, tp1: outcome.tp1 || tp1, tp2: outcome.tp2 || tp2, tp3: !!outcome.tp3 });
     i = Math.max(i + 1, j + 1);
   }
   const entered = trades.filter((t) => t.status !== "EXPIRED" || t.r !== 0);
@@ -477,7 +485,7 @@ async function backtest(base, tf, bars, preloaded) {
     winRatePct: pct(wins, decided),
     tp1RatePct: pct(entered.filter((t) => t.tp1).length, entered.length),
     tp2RatePct: pct(entered.filter((t) => t.tp2).length, entered.length),
-    tp3RatePct: pct(trades.filter((t) => t.status === "WIN" && t.r === 3).length, entered.length),
+    tp3RatePct: pct(entered.filter((t) => t.tp3).length, entered.length),
     avgR: rs.length ? round(rs.reduce((a, b) => a + b, 0) / rs.length, 2) : null,
   };
 }
@@ -501,6 +509,25 @@ function qualityTier(volUsd, atrPct) {
   const score = liq + stab;                                             // 0..5
   const tier = score >= 4 ? "Blue-chip" : score >= 3 ? "Solid" : score >= 2 ? "Moderate" : "Speculative";
   return { liquidityUsd: Math.round(v), atrPct: atrPct == null ? null : round(atrPct, 2), score, tier };
+}
+
+// Market regime: don't fight BTC. Risk-on = BTC in an uptrend AND most coins
+// above their trend; risk-off = BTC down or broad weakness. Longs taken against
+// the regime are the ones that fail, so we flag/gate them.
+let marketRegime = { tier: "NEUTRAL", breadthPct: null, longs: 0, shorts: 0, total: 0, btc: "NEUTRAL", at: 0 };
+function computeRegime(signals) {
+  const ok = signals.filter((s) => !s.error);
+  const longs = ok.filter((s) => s.direction === "LONG").length;
+  const shorts = ok.filter((s) => s.direction === "SHORT").length;
+  const total = ok.length || 1;
+  const breadthPct = round((longs / total) * 100, 0);
+  const btc = signals.find((s) => s.base === "BTC");
+  const btcDir = btc && !btc.error ? btc.direction : "NEUTRAL";
+  let tier;
+  if (btcDir !== "SHORT" && breadthPct >= 55) tier = "RISK_ON";
+  else if (btcDir === "SHORT" || breadthPct < 35) tier = "RISK_OFF";
+  else tier = "NEUTRAL";
+  return { tier, breadthPct, longs, shorts, total, btc: btcDir, at: Date.now() };
 }
 
 const scanCache = {};
@@ -527,7 +554,8 @@ async function scanMarket(tf, force) {
     }
     const rank = (s) => (s.error || s.direction === "NEUTRAL" ? -1 : s.confidence);
     results.sort((a, b) => rank(b) - rank(a));
-    const data = { tf, fx, source: ACTIVE?.name || null, generatedAt: new Date().toISOString(), universe: universe.length, actionable: results.filter((s) => s.direction !== "NEUTRAL" && !s.error).length, signals: results };
+    if (tf === SIGNAL_TF) marketRegime = computeRegime(results); // one regime read from the main TF
+    const data = { tf, fx, source: ACTIVE?.name || null, generatedAt: new Date().toISOString(), universe: universe.length, actionable: results.filter((s) => s.direction !== "NEUTRAL" && !s.error).length, regime: marketRegime, signals: results };
     scanCache[tf] = { at: Date.now(), data };
     return data;
   } finally { scanning = false; }
@@ -631,13 +659,24 @@ function advance(t, P, now) {
     const upd = {}; const nowD = new Date();
     if (!t.tp1_hit && reach(t.tp1)) { upd.tp1_hit = true; upd.tp1_at = nowD; }
     if (!t.tp2_hit && reach(t.tp2)) { upd.tp2_hit = true; upd.tp2_at = nowD; }
-    if (reach(t.tp3)) { return { ...upd, tp3_hit: true, tp3_at: nowD, status: "WIN", result_r: 3, closed_at: nowD }; }
-    if (belowStop) { const won = t.tp1_hit || upd.tp1_hit; return { ...upd, status: won ? "WIN" : "LOSS", result_r: won ? (t.tp2_hit || upd.tp2_hit ? 2 : 1) : -1, closed_at: new Date() }; }
+    const t1 = t.tp1_hit || upd.tp1_hit, t2 = t.tp2_hit || upd.tp2_hit;
+    // Scale-out: 50% at TP1, 25% at TP2, 25% at TP3 -> full run = +1.75R.
+    if (reach(t.tp3)) return { ...upd, tp3_hit: true, tp3_at: nowD, status: "WIN", result_r: 1.75, closed_at: nowD };
+    // Stop trails up to lock profit: original -> break-even (after TP1) -> TP1 (after TP2).
+    const effStop = t2 ? t.tp1 : t1 ? t.entry_mid : t.stop;
+    const hitStop = long ? P <= effStop : P >= effStop;
+    if (hitStop) {
+      // Stopped: before TP1 = full -1R; after TP1 at break-even = +0.5R booked;
+      // after TP2 (last 25% stopped at TP1) = +1.25R. Once TP1 hits, you can't lose.
+      const r = !t1 ? -1 : !t2 ? 0.5 : 1.25;
+      return { ...upd, status: t1 ? "WIN" : "LOSS", result_r: r, closed_at: nowD };
+    }
     const enteredMs = t.entered_at ? new Date(t.entered_at).getTime() : created;
     if ((now - enteredMs) / 60000 > MAX_HOLD_CANDLES * tfMin) {
-      const won = t.tp1_hit || upd.tp1_hit;
+      if (t2) return { ...upd, status: "WIN", result_r: 1.25, closed_at: nowD };
+      if (t1) return { ...upd, status: "WIN", result_r: 0.5, closed_at: nowD };
       const openR = round((long ? P - t.entry_mid : t.entry_mid - P) / Math.abs(t.entry_mid - t.stop), 2);
-      return { ...upd, status: won ? "WIN" : "EXPIRED", result_r: won ? (t.tp2_hit || upd.tp2_hit ? 2 : 1) : openR, closed_at: new Date() };
+      return { ...upd, status: "EXPIRED", result_r: openR, closed_at: nowD };
     }
     return Object.keys(upd).length ? upd : null;
   }
@@ -751,6 +790,7 @@ const settings = {
   proxyUrl: process.env.BINANCE_PROXY_URL || "", // route testnet calls via an allowed region
   qualityOnly: !/^(0|false|no|off)$/i.test(process.env.QUALITY_ONLY || "true"), // only trade blue-chip/solid coins
   holdThroughDips: /^(1|true|yes|on)$/i.test(process.env.HOLD_THROUGH_DIPS || ""), // no stop: hold a sideways spot until TP1
+  regimeFilter: !/^(0|false|no|off)$/i.test(process.env.REGIME_FILTER || "true"), // don't auto-buy when the market is risk-off
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -824,6 +864,7 @@ async function maybeAutoTrade(s) {
   if (!settings.autoTrade || !tnConfigured()) return;
   if (s.direction !== "LONG" || !s.entry || !s.targets) return;            // spot = long only
   if (s.confidence < TRACK_MIN_CONFIDENCE) return;                          // >=95% only
+  if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;    // don't buy longs when market is risk-off
   if (settings.qualityOnly && (!s.quality || s.quality.score < 3)) return;  // blue-chip/solid only
   const symbol = s.symbol + QUOTE;
   if (await tstore.hasOpen(symbol)) return;                                 // one open trade per coin
@@ -950,7 +991,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -959,6 +1000,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.autoTrade === "boolean") settings.autoTrade = b.autoTrade;
   if (typeof b.qualityOnly === "boolean") settings.qualityOnly = b.qualityOnly;
   if (typeof b.holdThroughDips === "boolean") settings.holdThroughDips = b.holdThroughDips;
+  if (typeof b.regimeFilter === "boolean") settings.regimeFilter = b.regimeFilter;
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
   if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
   if (typeof b.proxyUrl === "string") settings.proxyUrl = b.proxyUrl.trim();
@@ -986,6 +1028,7 @@ app.get("/api/testnet/trades", wrap(async (_req, res) => {
   res.json({ configured: tnConfigured(), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, open, recent: closed.slice(0, 40), totalPnlUsd: round(pnl, 2), closed: closed.length, wins, losses: closed.length - wins });
 }));
 
+app.get("/api/regime", wrap(async (_req, res) => res.json(marketRegime)));
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
