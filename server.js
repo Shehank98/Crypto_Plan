@@ -93,6 +93,65 @@ function stochRsi(c, p = 14) {
   const recent = rs.slice(-p), mn = Math.min(...recent), mx = Math.max(...recent), last = rs[rs.length - 1];
   return mx > mn ? (last - mn) / (mx - mn) : 0.5;
 }
+// --- More TA-Lib-style indicators (reimplemented natively, no ta-lib dep) ---
+// CCI — Commodity Channel Index; >100 overbought, <-100 oversold.
+function cci(h, l, c, p = 20) {
+  if (!c || c.length < p) return null;
+  const tp = c.map((_, i) => (h[i] + l[i] + c[i]) / 3);
+  const recent = tp.slice(-p), ma = recent.reduce((a, b) => a + b, 0) / p;
+  const md = recent.reduce((a, b) => a + Math.abs(b - ma), 0) / p;
+  return md === 0 ? 0 : (tp[tp.length - 1] - ma) / (0.015 * md);
+}
+// Williams %R — -20 overbought, -80 oversold.
+function williamsR(h, l, c, p = 14) {
+  if (!c || c.length < p) return null;
+  const hh = Math.max(...h.slice(-p)), ll = Math.min(...l.slice(-p)), last = c[c.length - 1];
+  return hh === ll ? -50 : (-100 * (hh - last)) / (hh - ll);
+}
+// OBV — On-Balance Volume; return the series so we can read its slope.
+function obv(c, vol) {
+  if (!c || c.length < 2) return null;
+  let o = 0; const arr = [0];
+  for (let i = 1; i < c.length; i++) { if (c[i] > c[i - 1]) o += vol[i] || 0; else if (c[i] < c[i - 1]) o -= vol[i] || 0; arr.push(o); }
+  return arr;
+}
+// Normalized slope of a series over the last n points (-1..1-ish).
+function slopeOf(arr, n = 10) {
+  if (!arr || arr.length < n + 1) return 0;
+  const a = arr[arr.length - 1 - n], b = arr[arr.length - 1];
+  const denom = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+  return (b - a) / denom;
+}
+// Parabolic SAR — trailing stop-and-reverse; returns {sar, bull}.
+function psar(h, l, step = 0.02, max = 0.2) {
+  if (!h || h.length < 5) return null;
+  let bull = true, af = step, ep = h[0], sar = l[0];
+  for (let i = 1; i < h.length; i++) {
+    sar = sar + af * (ep - sar);
+    if (bull) {
+      if (l[i] < sar) { bull = false; sar = ep; ep = l[i]; af = step; }
+      else if (h[i] > ep) { ep = h[i]; af = Math.min(max, af + step); }
+    } else {
+      if (h[i] > sar) { bull = true; sar = ep; ep = h[i]; af = step; }
+      else if (l[i] < ep) { ep = l[i]; af = Math.min(max, af + step); }
+    }
+  }
+  return { sar, bull };
+}
+// Candlestick patterns on the latest bar (needs opens). TA-Lib-style reads.
+function candlePatterns(o, h, l, c) {
+  const n = c.length;
+  if (!o || o.length !== n || n < 2) return [];
+  const i = n - 1, out = [];
+  const body = Math.abs(c[i] - o[i]), range = (h[i] - l[i]) || 1e-9;
+  const upper = h[i] - Math.max(c[i], o[i]), lower = Math.min(c[i], o[i]) - l[i];
+  if (c[i] > o[i] && c[i - 1] < o[i - 1] && c[i] >= o[i - 1] && o[i] <= c[i - 1]) out.push({ name: "Bullish engulfing", bias: "bull" });
+  if (c[i] < o[i] && c[i - 1] > o[i - 1] && o[i] >= c[i - 1] && c[i] <= o[i - 1]) out.push({ name: "Bearish engulfing", bias: "bear" });
+  if (lower > 2 * body && upper < body && body / range < 0.4) out.push({ name: "Hammer", bias: "bull" });
+  if (upper > 2 * body && lower < body && body / range < 0.4) out.push({ name: "Shooting star", bias: "bear" });
+  if (body / range < 0.1) out.push({ name: "Doji (indecision)", bias: "neutral" });
+  return out;
+}
 
 // ===========================================================================
 // FX (USD -> LKR)
@@ -231,14 +290,18 @@ async function getOHLCV(base, tf, limit = 210) {
 // ===========================================================================
 function humanizeEta(minutes) { if (!Number.isFinite(minutes) || minutes <= 0) return "—"; if (minutes < 60) return `~${Math.round(minutes)}m`; if (minutes < 1440) return `~${(minutes / 60).toFixed(1)}h`; return `~${(minutes / 1440).toFixed(1)}d`; }
 
-function computeSignal(base, tf, d, fx) {
-  const { highs, lows, closes, volumes } = d;
+function computeSignal(base, tf, d, fx, opts = {}) {
+  const { opens, highs, lows, closes, volumes } = d;
   if (!closes || closes.length < 60) return { base, symbol: base, tf, error: "insufficient data" };
   const price = closes[closes.length - 1];
   const ema20 = ema(closes, 20), ema50 = ema(closes, 50), ema200 = ema(closes, 200) ?? sma(closes, Math.min(closes.length, 120));
   const r = rsi(closes, 14), mac = macd(closes), boll = bollinger(closes, 20, 2);
   const a = atr(highs, lows, closes, 14), vw = vwap(highs, lows, closes, volumes), mf = mfi(highs, lows, closes, volumes, 14);
   const adxV = adx(highs, lows, closes, 14), srsi = stochRsi(closes, 14);
+  // Extra confirmations (TA-Lib-style, native)
+  const cciV = cci(highs, lows, closes, 20), wr = williamsR(highs, lows, closes, 14);
+  const obvArr = obv(closes, volumes), obvSlope = slopeOf(obvArr, 10);
+  const ps = psar(highs, lows), patterns = candlePatterns(opens, highs, lows, closes);
   const e20 = emaArray(closes, 20);
   const slope = e20.length > 6 && e20[e20.length - 6] ? (e20[e20.length - 1] - e20[e20.length - 6]) / 5 / price : 0;
   const swingHigh = Math.max(...highs.slice(-20)), swingLow = Math.min(...lows.slice(-20));
@@ -260,15 +323,27 @@ function computeSignal(base, tf, d, fx) {
     if (adxV != null) { if (adxV >= 25) { conf += 10; reasons.push(`ADX ${adxV.toFixed(0)} (strong trend)`); } else if (adxV < 18) { conf -= 14; reasons.push(`ADX ${adxV.toFixed(0)} (weak/choppy)`); } }
     // Stochastic RSI: momentum timing for the entry.
     if (srsi != null) { if (long && srsi < 0.2) { conf += 8; reasons.push("StochRSI oversold (entry timing)"); } else if (!long && srsi > 0.8) { conf += 8; reasons.push("StochRSI overbought (entry timing)"); } }
+    // OBV: is volume flowing with the trend? (accumulation vs distribution)
+    if (obvArr) { if ((long && obvSlope > 0.02) || (!long && obvSlope < -0.02)) { conf += 6; reasons.push("OBV volume confirms trend"); } else if ((long && obvSlope < -0.02) || (!long && obvSlope > 0.02)) { conf -= 6; reasons.push("OBV volume diverging (caution)"); } }
+    // Parabolic SAR: trailing stop on the trend side?
+    if (ps) { if ((long && ps.bull) || (!long && !ps.bull)) { conf += 6; reasons.push("Parabolic SAR on trend side"); } else { conf -= 6; reasons.push("Parabolic SAR flipped against"); } }
+    // CCI: dip/rally timing within the trend.
+    if (cciV != null) { if (long && cciV < -100) { conf += 4; reasons.push("CCI oversold — good dip entry"); } else if (!long && cciV > 100) { conf += 4; reasons.push("CCI overbought — good rally entry"); } }
+    // Candlestick confirmation on the latest bar.
+    const patBias = patterns.find((p) => p.bias !== "neutral");
+    if (patBias) { if ((long && patBias.bias === "bull") || (!long && patBias.bias === "bear")) { conf += 6; reasons.push(`${patBias.name} confirms`); } else { conf -= 4; reasons.push(`${patBias.name} against the trade`); } }
+    // Higher-timeframe confluence — the biggest accuracy lever.
+    if (opts.htfDir) { if (opts.htfDir === direction) { conf += 8; reasons.push(`Higher timeframe (${opts.htf}) trend agrees`); } else if (opts.htfDir !== "NEUTRAL") { conf -= 16; reasons.push(`Higher timeframe (${opts.htf}) trend conflicts — risky`); } }
     conf = Math.max(0, Math.min(100, Math.round(conf)));
   }
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
 
-  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), adx: round(adxV, 1), stochRsi: round(srsi, 2), ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200) };
+  const obvTrend = obvArr ? (obvSlope > 0.02 ? "up" : obvSlope < -0.02 ? "down" : "flat") : null;
+  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200) };
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
-  const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: rp(price), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, generatedAt: new Date().toISOString() };
+  const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: rp(price), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, patterns, htf: opts.htf || null, htfDir: opts.htfDir || null, generatedAt: new Date().toISOString() };
   if (direction === "NEUTRAL" || !a) return { ...out, note: "No trend / setup — stand aside." };
 
   const long = direction === "LONG";
@@ -295,9 +370,20 @@ function computeSignal(base, tf, d, fx) {
   return { ...out, entry: { low: rp(entryLow), high: rp(entryHigh), mid: rp(entryMid), status, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: rp(stop), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, invalidation: long ? `Close below ${rp(stop)} invalidates the long.` : `Close above ${rp(stop)} invalidates the short.` };
 }
 
-async function signalFor(base, tf, fx) {
-  try { const d = await getOHLCV(base, tf, 210); if (!d) return { base, symbol: base, tf, error: "no data" }; return computeSignal(base, tf, d, fx); }
+async function signalFor(base, tf, fx, opts = {}) {
+  try { const d = await getOHLCV(base, tf, 210); if (!d) return { base, symbol: base, tf, error: "no data" }; return computeSignal(base, tf, d, fx, opts); }
   catch (e) { return { base, symbol: base, tf, error: e.message }; }
+}
+
+// The next timeframe up — used for multi-timeframe confluence.
+const HTF_OF = { "15m": "1h", "1h": "4h", "4h": null };
+// Build base -> trend direction from a recent higher-TF scan cache (no extra fetches).
+function htfTrendMap(htf) {
+  const c = scanCache[htf];
+  if (!c || Date.now() - c.at > INDICATOR_REFRESH_SEC * 3000) return null; // stale/absent -> skip HTF
+  const m = new Map();
+  for (const s of c.data.signals) if (!s.error) m.set(s.base, s.direction);
+  return m;
 }
 
 // Historical backtest: replay the exact signal rules over past candles and
@@ -373,10 +459,15 @@ async function scanMarket(tf, force) {
   scanning = true;
   try {
     const [fx, universe] = await Promise.all([getUsdLkr(), getUniverse(UNIVERSE_SIZE)]);
+    // Multi-timeframe confluence: bias each signal by the higher-TF trend (reuses
+    // that TF's cached scan — no extra fetches). Ensure the higher TF stays scanned.
+    const htf = HTF_OF[tf];
+    if (htf) touchTf(htf);
+    const htfMap = htf ? htfTrendMap(htf) : null;
     const results = [];
     for (let i = 0; i < universe.length; i += 8) {
       const batch = universe.slice(i, i + 8);
-      const sigs = await Promise.all(batch.map((u) => signalFor(u.base, tf, fx)));
+      const sigs = await Promise.all(batch.map((u) => signalFor(u.base, tf, fx, { htf, htfDir: htfMap ? htfMap.get(u.base) : undefined })));
       sigs.forEach((s, j) => { if (batch[j]) s.changePct = round(batch[j].changePct, 2); });
       results.push(...sigs);
     }
@@ -612,6 +703,35 @@ app.get("/api/signals", wrap(async (req, res) => {
 
 app.get("/api/signal/:symbol", wrap(async (req, res) => { const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF; const fx = await getUsdLkr(); res.json(await signalFor(req.params.symbol.toUpperCase().replace(QUOTE, ""), tf, fx)); }));
 
+// Full analysis for one coin: the signal on the chosen TF (with higher-TF
+// confluence applied), a per-timeframe agreement snapshot, and a backtest.
+app.get("/api/analysis/:symbol", wrap(async (req, res) => {
+  const base = req.params.symbol.toUpperCase().replace(QUOTE, "");
+  const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
+  const fx = await getUsdLkr();
+  // Load each timeframe once, reuse for both the snapshot and the main signal.
+  const perTf = {};
+  const cache = {};
+  for (const t of TIMEFRAMES) {
+    const s = await signalFor(base, t, fx);
+    cache[t] = s;
+    perTf[t] = s.error ? { error: s.error } : { direction: s.direction, confidence: s.confidence, price: s.priceUsd, adx: s.indicators?.adx };
+  }
+  // Recompute the requested TF with higher-TF confluence for the headline signal.
+  const htf = HTF_OF[tf];
+  let signal = cache[tf];
+  if (htf && perTf[htf] && !perTf[htf].error && signal && !signal.error) {
+    const d = await getOHLCV(base, tf, 210);
+    if (d) signal = computeSignal(base, tf, d, fx, { htf, htfDir: perTf[htf].direction });
+  }
+  // Agreement score across timeframes.
+  const dirs = Object.values(perTf).filter((p) => !p.error).map((p) => p.direction);
+  const longs = dirs.filter((x) => x === "LONG").length, shorts = dirs.filter((x) => x === "SHORT").length;
+  const consensus = longs > shorts && longs >= 2 ? "LONG" : shorts > longs && shorts >= 2 ? "SHORT" : "MIXED";
+  const bt = await backtest(base, tf).catch(() => null);
+  res.json({ symbol: base, tf, htf, signal, perTimeframe: perTf, consensus, agree: { long: longs, short: shorts, total: dirs.length }, backtest: bt, generatedAt: new Date().toISOString() });
+}));
+
 // OHLC candles for charting (Lightweight Charts). time in seconds.
 app.get("/api/candles/:symbol", wrap(async (req, res) => {
   const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
@@ -717,4 +837,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, computeSignal, humanizeEta, advance, backtest };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest };

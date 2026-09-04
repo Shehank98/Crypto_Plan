@@ -77,6 +77,17 @@
     </p>
   </div>
 
+  <!-- Analysis modal -->
+  <div id="analysis-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-3">
+    <div class="card w-full max-w-3xl p-5" style="max-height:92vh; overflow-y:auto">
+      <div class="mb-3 flex items-center justify-between">
+        <h3 id="an-title" class="text-lg font-bold text-white"></h3>
+        <button id="an-close" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm hover:bg-edge">✕ Close</button>
+      </div>
+      <div id="an-body" class="text-sm"></div>
+    </div>
+  </div>
+
   <!-- Chart modal -->
   <div id="chart-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-3">
     <div class="card w-full max-w-5xl p-4">

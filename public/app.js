@@ -69,12 +69,12 @@ function card(s) {
     <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "—"} · ADX ${ind.adx ?? "—"} · StochRSI ${ind.stochRsi ?? "—"} · MFI ${ind.mfi ?? "—"}</p>`;
 
   if (s.direction === "NEUTRAL" || !s.entry) {
-    return `<div class="card p-4">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div><div class="flex gap-1">${btBtn}${chartBtn}</div></div>${btRow}</div>`;
+    return `<div class="card p-4 cursor-pointer hover:border-indigo-500/40" data-analyze="${s.symbol}" data-tf="${s.tf}" title="Click for full analysis">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div><div class="flex gap-1">${btBtn}${chartBtn}</div></div>${btRow}</div>`;
   }
   const readyCls = s.entry.status === "READY" ? "text-emerald-300" : "text-amber-300";
   const tps = s.targets.map((t) => `<div class="flex items-center justify-between text-sm"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums"><span class="text-emerald-400">+${t.gainPct}%</span> · ${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("");
   const f = s.forecast || {};
-  return `<div class="card glow p-4">${head}
+  return `<div class="card glow p-4 cursor-pointer hover:border-indigo-500/40" data-analyze="${s.symbol}" data-tf="${s.tf}" title="Click for full analysis">${head}
     <div class="mt-2 flex items-center justify-between text-xs"><span class="${readyCls} font-medium">${s.entry.status}</span><span class="text-slate-500">forecast ${f.horizon}: ${usd(f.priceUsd)}</span></div>
     ${trackedBadge(s.tracked)}
     <div class="mt-2 space-y-1 rounded-lg border border-edge bg-ink/50 p-2">
@@ -94,6 +94,7 @@ function render() {
   else if (filter === "LONG" || filter === "SHORT") list = list.filter((s) => s.direction === filter);
   if (search) list = list.filter((s) => s.symbol.includes(search.toUpperCase()));
   $("signals").innerHTML = list.map(card).join("");
+  $("signals").querySelectorAll("[data-analyze]").forEach((el) => (el.onclick = (e) => { if (e.target.closest("[data-chart],[data-backtest]")) return; openAnalysis(el.dataset.analyze, el.dataset.tf); }));
   $("signals").querySelectorAll("[data-chart]").forEach((b) => (b.onclick = () => openChart(b.dataset.chart, b.dataset.tf)));
   $("signals").querySelectorAll("[data-backtest]").forEach((b) => (b.onclick = async () => {
     const sym = b.dataset.backtest, tfv = b.dataset.tf, key = sym + "|" + tfv;
@@ -393,6 +394,98 @@ async function openChart(sym, tfv) {
   };
 }
 
+// ---------- full analysis modal ----------
+const DIRPILL = (dir, extra = "") => `<span class="pill ${dir === "LONG" ? "bg-emerald-900 text-emerald-200" : dir === "SHORT" ? "bg-rose-900 text-rose-200" : "bg-slate-700 text-slate-300"}">${dir}${extra}</span>`;
+function closeAnalysis() { const m = $("analysis-modal"); m.classList.add("hidden"); m.classList.remove("flex"); }
+// Turn the indicator block into readable rows with a verdict.
+function indicatorRows(ind, sig) {
+  if (!ind) return "";
+  const row = (k, v, note, cls) => `<div class="flex items-center justify-between border-b border-edge/50 py-1"><span class="text-slate-400">${k}</span><span class="tabular-nums text-slate-200">${v} <span class="ml-1 text-xs ${cls || "text-slate-500"}">${note}</span></span></div>`;
+  const out = [];
+  if (ind.rsi14 != null) out.push(row("RSI (14)", ind.rsi14, ind.rsi14 > 70 ? "overbought" : ind.rsi14 < 30 ? "oversold" : "neutral", ind.rsi14 > 70 || ind.rsi14 < 30 ? "text-amber-400" : ""));
+  if (ind.adx != null) out.push(row("ADX", ind.adx, ind.adx >= 25 ? "strong trend" : ind.adx < 18 ? "choppy / weak" : "moderate", ind.adx >= 25 ? "text-emerald-400" : ind.adx < 18 ? "text-rose-400" : ""));
+  if (ind.stochRsi != null) out.push(row("Stoch RSI", ind.stochRsi, ind.stochRsi < 0.2 ? "oversold (dip)" : ind.stochRsi > 0.8 ? "overbought" : "mid", ""));
+  if (ind.mfi != null) out.push(row("MFI (money flow)", ind.mfi, ind.mfi > 80 ? "overbought" : ind.mfi < 20 ? "oversold" : "neutral", ""));
+  if (ind.cci != null) out.push(row("CCI", ind.cci, ind.cci > 100 ? "overbought" : ind.cci < -100 ? "oversold" : "neutral", ""));
+  if (ind.williamsR != null) out.push(row("Williams %R", ind.williamsR, ind.williamsR > -20 ? "overbought" : ind.williamsR < -80 ? "oversold" : "neutral", ""));
+  if (ind.obvTrend) out.push(row("OBV (volume)", ind.obvTrend, ind.obvTrend === "up" ? "accumulation" : ind.obvTrend === "down" ? "distribution" : "flat", ind.obvTrend === "up" ? "text-emerald-400" : ind.obvTrend === "down" ? "text-rose-400" : ""));
+  if (ind.psar) out.push(row("Parabolic SAR", ind.psar, ind.psar === "bull" ? "below price (bullish)" : "above price (bearish)", ind.psar === "bull" ? "text-emerald-400" : "text-rose-400"));
+  if (ind.macdHist != null) out.push(row("MACD hist", ind.macdHist, ind.macdHist > 0 ? "bullish momentum" : "bearish momentum", ind.macdHist > 0 ? "text-emerald-400" : "text-rose-400"));
+  if (ind.vwap != null) out.push(row("VWAP", usd(ind.vwap), sig.priceUsd > ind.vwap ? "price above" : "price below", ""));
+  return out.join("");
+}
+async function openAnalysis(sym, tfv) {
+  const m = $("analysis-modal"); m.classList.remove("hidden"); m.classList.add("flex");
+  $("an-title").innerHTML = `<span style="color:${coinColor(sym)}">${sym}</span> · ${tfv} — full analysis`;
+  $("an-body").innerHTML = '<p class="py-10 text-center text-slate-500">Analyzing across timeframes…</p>';
+  let a;
+  try { a = await api(`/api/analysis/${sym}?tf=${encodeURIComponent(tfv)}`); }
+  catch (e) { $("an-body").innerHTML = `<p class="py-6 text-rose-400">${e.message}</p>`; return; }
+  const s = a.signal || {};
+  const d = DIR[s.direction] || DIR.NEUTRAL;
+  // Multi-timeframe agreement
+  const tfRows = Object.entries(a.perTimeframe || {}).map(([t, p]) => p.error
+    ? `<td class="px-2 py-1 text-center text-slate-600">—</td>`
+    : `<td class="px-2 py-1 text-center">${DIRPILL(p.direction)}<div class="text-[11px] text-slate-500">${p.confidence}%</div></td>`).join("");
+  const tfHead = Object.keys(a.perTimeframe || {}).map((t) => `<th class="px-2 py-1 text-center text-xs uppercase text-slate-500">${t}</th>`).join("");
+  const consCls = a.consensus === "LONG" ? "text-emerald-400" : a.consensus === "SHORT" ? "text-rose-400" : "text-amber-400";
+  // Patterns
+  const pats = (s.patterns || []).map((p) => `<span class="pill ${p.bias === "bull" ? "bg-emerald-900 text-emerald-200" : p.bias === "bear" ? "bg-rose-900 text-rose-200" : "bg-slate-700 text-slate-300"}">${p.name}</span>`).join(" ") || '<span class="text-slate-500">none on the latest bar</span>';
+  // Plan
+  const plan = s.entry ? `
+    <div class="rounded-lg border border-edge bg-ink/50 p-3">
+      <div class="flex justify-between py-0.5"><span class="text-slate-400">Entry zone</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} – ${usd(s.entry.high)} <span class="text-xs ${s.entry.status === "READY" ? "text-emerald-400" : "text-amber-400"}">${s.entry.status}</span></span></div>
+      <div class="flex justify-between py-0.5"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${usd(s.stop.priceUsd)} (-${s.stop.riskPct}%)</span></div>
+      ${s.targets.map((t) => `<div class="flex justify-between py-0.5"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums"><span class="text-emerald-400">+${t.gainPct}%</span> · ${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("")}
+      <div class="mt-2 space-y-1 border-t border-edge pt-2 text-xs text-slate-400">
+        <div><b class="text-slate-300">Entry:</b> ${s.entry.why || ""}</div>
+        <div><b class="text-slate-300">Stop:</b> ${s.stop.why || ""}</div>
+        <div><b class="text-slate-300">Targets:</b> ${s.targetsWhy || ""}</div>
+      </div>
+    </div>` : `<p class="text-slate-400">${s.note || "No active setup — stand aside."}</p>`;
+  const bt = a.backtest && !a.backtest.error ? a.backtest : null;
+  const btBlock = bt
+    ? `<div class="flex flex-wrap gap-2 text-xs"><span class="pill border border-edge bg-panel">Backtest ${bt.bars} bars</span><span class="pill bg-slate-800">Win <b class="${bt.winRatePct >= 55 ? "text-emerald-400" : bt.winRatePct >= 45 ? "text-sky-400" : "text-rose-400"}">${bt.winRatePct ?? "—"}%</b></span><span class="pill bg-slate-800">${bt.trades} trades</span><span class="pill bg-slate-800 text-emerald-300">TP1 ${bt.tp1RatePct ?? "—"}%</span><span class="pill bg-slate-800">Avg <b class="${bt.avgR > 0 ? "text-emerald-400" : "text-rose-400"}">${bt.avgR ?? "—"}R</b></span></div>`
+    : `<p class="text-xs text-slate-500">${a.backtest && a.backtest.error ? "Backtest: " + a.backtest.error : "Backtest unavailable."}</p>`;
+  $("an-body").innerHTML = `
+    <div class="mb-4 flex flex-wrap items-center gap-3">
+      <span class="pill border ${d.cls} text-sm">${s.direction} ${s.confidence ?? 0}%</span>
+      <span class="text-sm text-slate-400">Price ${usd(s.priceUsd)}</span>
+      ${s.htf && s.htfDir ? `<span class="pill bg-slate-800 text-xs">${s.htfDir === s.direction ? "✅" : "⚠️"} ${s.htf} trend ${s.htfDir}</span>` : ""}
+    </div>
+    <div class="mb-4 h-2 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence ?? 0}%;background:${d.bar}" class="h-full"></div></div>
+
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">Multi-timeframe agreement</h4>
+    <div class="mb-1 overflow-x-auto"><table class="w-full"><thead><tr>${tfHead}</tr></thead><tbody><tr>${tfRows}</tr></tbody></table></div>
+    <p class="mb-4 text-xs">Consensus: <b class="${consCls}">${a.consensus}</b> <span class="text-slate-500">(${a.agree.long} long / ${a.agree.short} short of ${a.agree.total} timeframes)</span></p>
+
+    <div class="mb-4 grid gap-4 md:grid-cols-2">
+      <div>
+        <h4 class="mb-1 text-sm font-semibold text-slate-300">Indicators</h4>
+        ${indicatorRows(s.indicators, s)}
+      </div>
+      <div>
+        <h4 class="mb-1 text-sm font-semibold text-slate-300">Trade plan</h4>
+        ${plan}
+      </div>
+    </div>
+
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">Candlestick patterns (latest bar)</h4>
+    <div class="mb-4 flex flex-wrap gap-1">${pats}</div>
+
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">Why this call</h4>
+    <div class="mb-4 flex flex-wrap gap-1">${(s.reasons || []).map((r) => `<span class="pill bg-slate-800 text-slate-300">${r}</span>`).join(" ") || '<span class="text-slate-500">—</span>'}</div>
+
+    <h4 class="mb-1 text-sm font-semibold text-slate-300">Historical backtest (${tfv})</h4>
+    <div class="mb-4">${btBlock}</div>
+
+    <div class="flex gap-2">
+      <button id="an-chart" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm hover:bg-edge">📈 Open chart</button>
+    </div>
+    <p class="mt-3 text-[11px] text-slate-500">Educational only — not financial advice. Always use your own stop.</p>`;
+  const cb = $("an-chart"); if (cb) cb.onclick = () => { closeAnalysis(); openChart(sym, tfv); };
+}
+
 async function load() {
   try {
     const data = await api(`/api/signals?tf=${encodeURIComponent(tf)}`);
@@ -453,6 +546,8 @@ async function init() {
   $("btn-refresh").onclick = rescan;
   $("chart-close").onclick = closeChart;
   $("chart-modal").onclick = (e) => { if (e.target.id === "chart-modal") closeChart(); };
+  $("an-close").onclick = closeAnalysis;
+  $("analysis-modal").onclick = (e) => { if (e.target.id === "analysis-modal") closeAnalysis(); };
   await load();
   const ms = Math.max(3, CONFIG.scanIntervalSec || 5) * 1000; // live signals auto-refresh
   setInterval(load, ms);

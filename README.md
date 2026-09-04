@@ -30,9 +30,21 @@ libraries).
 3. **Trade plan:** entry zone around the EMA20/VWAP pullback, stop beyond the recent swing
    (± ATR), TP1/2/3 at 1R/2R/3R, ETA from ATR velocity, and a drift+ATR price forecast.
 
-Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI, **ADX**
-(trend strength — filters choppy markets to lift win rate) and **Stochastic RSI** (entry
-timing).
+Indicators (all dependency-free, reimplemented from scratch — inspired by **ta-lib** and
+**ccxt**, not depending on them): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI, **ADX**
+(trend strength), **Stochastic RSI** (entry timing), **CCI**, **Williams %R**, **OBV**
+(volume accumulation/distribution), **Parabolic SAR** (trailing trend side) and
+**candlestick patterns** (engulfing / hammer / shooting-star / doji). Each adds a confirmation
+to the confidence score so weak setups are filtered out.
+
+**Multi-timeframe confluence (accuracy):** a signal is boosted when the **next timeframe up**
+agrees (a 1h LONG confirmed by the 4h uptrend) and penalised when it conflicts — reusing the
+higher-TF scan so it costs no extra API calls. This is the single biggest lift to win rate.
+
+**Click any card → full analysis** (`GET /api/analysis/:symbol?tf=1h`): direction + confidence,
+a **multi-timeframe agreement** table (15m/1h/4h) with a consensus verdict, every indicator with
+a plain-English read, detected candlestick patterns, the full trade plan with reasons, and a
+historical backtest — all in one popup.
 
 **Live status on every card:** once a signal is logged, its card shows what happened next —
 **⏳ Waiting for entry**, **🔵 In trade**, **🎯 TP1/TP2/TP3 hit**, **✅ WIN +R**, or
