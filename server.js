@@ -732,7 +732,7 @@ async function monitor(prices) {
     const P = prices.get(t.symbol);
     if (P == null) continue;
     const upd = advance(t, P, now);
-    if (upd) await store.update(t.id, upd);
+    if (upd) { await store.update(t.id, upd); await maybeAlertTp1(t, upd).catch(() => {}); }
   }
 }
 
@@ -751,7 +751,8 @@ async function openFrom(data) {
       // Skip illiquid junk (tokenized stocks, micro-caps) - they produce the ugly outlier losses.
       if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
       await store.open(s).catch((e) => console.warn("[track]", e.message));
-      await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
+      if (settings.tgApproval) await proposeTrade(s).catch((e) => console.warn("[propose]", e.message)); // ask on Telegram first
+      else await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
     }
   }
 }
@@ -822,6 +823,9 @@ const settings = {
   regimeFilter: !/^(0|false|no|off)$/i.test(process.env.REGIME_FILTER || "true"), // don't auto-buy when the market is risk-off
   exitStyle: (process.env.EXIT_STYLE || "tp1").toLowerCase() === "scaleout" ? "scaleout" : "tp1", // tp1 = full profit at TP1 (best when TP1 is the edge); scaleout = ride to TP3
   minTrackLiquidityUsd: Number(process.env.MIN_TRACK_LIQUIDITY_USD || 15e6), // ignore illiquid junk (tokenized stocks, micro-caps)
+  tgApproval: /^(1|true|yes|on)$/i.test(process.env.TG_APPROVAL || ""), // ask on Telegram before each trade
+  positionUsd: Number(process.env.POSITION_USD || 20),   // $ you'd put per trade (for the profit projection)
+  capitalUsd: Number(process.env.CAPITAL_USD || 200),    // total capital (context / risk sizing)
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1026,7 +1030,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1037,6 +1041,9 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.holdThroughDips === "boolean") settings.holdThroughDips = b.holdThroughDips;
   if (typeof b.regimeFilter === "boolean") settings.regimeFilter = b.regimeFilter;
   if (b.exitStyle === "tp1" || b.exitStyle === "scaleout") settings.exitStyle = b.exitStyle;
+  if (typeof b.tgApproval === "boolean") settings.tgApproval = b.tgApproval;
+  if (b.positionUsd != null && Number.isFinite(+b.positionUsd)) settings.positionUsd = Math.max(1, +b.positionUsd);
+  if (b.capitalUsd != null && Number.isFinite(+b.capitalUsd)) settings.capitalUsd = Math.max(1, +b.capitalUsd);
   if (b.minTrackLiquidityUsd != null && Number.isFinite(+b.minTrackLiquidityUsd)) settings.minTrackLiquidityUsd = Math.max(0, +b.minTrackLiquidityUsd);
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
   if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
@@ -1089,12 +1096,69 @@ let bot = null;
 const chats = new Set();
 if (process.env.TELEGRAM_CHAT_ID) chats.add(String(process.env.TELEGRAM_CHAT_ID));
 const fmtUsd = (n) => "$" + Number(n).toLocaleString("en-US", { maximumFractionDigits: n < 10 ? 4 : 2 });
+
+// --- Ask-before-you-trade: propose each high-conviction setup on Telegram, wait
+// for a tap, then track it and alert you at TP1 with the profit. ---
+const proposals = new Map();  // key symbol|tf|dir -> plan {profit, loss, pos, gain1, ...}
+const approved = new Map();   // approved trades pending a TP1 alert
+const proposedAt = new Map(); // cooldown per key
+const PROPOSE_COOLDOWN = 3 * 3600_000;
+async function proposeTrade(s) {
+  if (!settings.tgApproval || !bot || chats.size === 0) return;
+  if (s.direction !== "LONG" && s.direction !== "SHORT") return;
+  if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") return; // don't propose longs when risk-off
+  const key = `${s.symbol}|${s.tf}|${s.direction}`;
+  if (Date.now() - (proposedAt.get(key) || 0) < PROPOSE_COOLDOWN) return;
+  proposedAt.set(key, Date.now());
+  const pos = settings.positionUsd;
+  const gain1 = s.targets[0].gainPct, profit = round((pos * gain1) / 100, 2);
+  const riskPct = s.stop.riskPct, loss = round((pos * riskPct) / 100, 2);
+  const tv = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}${QUOTE}`;
+  const text = `🔔 *Trade idea* — *${s.symbol} ${s.direction}*  _(${s.tf})_\n`
+    + `Confidence *${s.confidence}%* · quality ${s.quality?.tier || "-"} · regime ${marketRegime.tier}\n`
+    + `✅ Confirmed by: ${(s.reasons || []).slice(0, 4).join(", ")}\n\n`
+    + `Entry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)}\nStop ${fmtUsd(s.stop.priceUsd)}  ·  TP1 ${fmtUsd(s.targets[0].priceUsd)} (+${gain1}%)\n\n`
+    + `💵 If you put *$${pos}*:\n   • TP1 hit → *+$${profit}* profit\n   • Stop hit → *-$${loss}* loss\n   • Risk:reward ${s.rr?.toTp1 || "1:1"}\n\n`
+    + `[📈 Open chart](${tv})\n\n*Take this trade?*`;
+  const kb = { inline_keyboard: [[{ text: `✅ Take $${pos}`, callback_data: `take|${key}` }, { text: "❌ Skip", callback_data: `skip|${key}` }]] };
+  proposals.set(key, { symbol: s.symbol, tf: s.tf, direction: s.direction, entry: s.entry.mid, tp1: s.targets[0].priceUsd, gain1, pos, profit, loss });
+  for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", reply_markup: kb }).catch(() => {});
+}
+async function maybeAlertTp1(row, upd) {
+  if (!bot) return;
+  const key = `${row.symbol}|${row.tf}|${row.direction}`;
+  const a = approved.get(key);
+  if (!a || a.alerted) return;
+  if (!(upd.tp1_hit || upd.status === "WIN")) return;
+  a.alerted = true;
+  const msg = `🎯 *${row.symbol} ${row.direction}* hit *TP1*!\n`
+    + `Entry ${fmtUsd(row.entry_mid)} → TP1 ${fmtUsd(row.tp1)} (+${a.gain1}%)\n`
+    + `💰 On *$${a.pos}* that's *+$${a.profit}* profit. Closed at TP1 as planned. ✅`;
+  bot.sendMessage(a.chatId, msg, { parse_mode: "Markdown" }).catch(() => {});
+}
 function startTelegram() {
   if (!process.env.TELEGRAM_BOT_TOKEN) { console.log("[telegram] disabled"); return; }
   try {
     const TelegramBot = require("node-telegram-bot-api");
     bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
     bot.on("message", (m) => chats.add(m.chat.id));
+    // Inline Take / Skip buttons on trade proposals.
+    bot.on("callback_query", async (cq) => {
+      try {
+        const i = (cq.data || "").indexOf("|"); const action = cq.data.slice(0, i), key = cq.data.slice(i + 1);
+        const chatId = cq.message.chat.id, plan = proposals.get(key);
+        if (action === "take" && plan) {
+          approved.set(key, { ...plan, chatId, alerted: false, at: Date.now() });
+          if (tnConfigured() && settings.autoTrade) { const scan = scanCache[plan.tf]?.data; const sig = scan?.signals.find((x) => x.symbol === plan.symbol && x.direction === plan.direction); if (sig) await maybeAutoTrade(sig).catch(() => {}); }
+          await bot.answerCallbackQuery(cq.id, { text: "Taking the trade ✅" }).catch(() => {});
+          await bot.editMessageText(cq.message.text + `\n\n✅ TAKEN — I'll message you when TP1 hits (+$${plan.profit}).`, { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {});
+        } else if (action === "skip") {
+          proposals.delete(key);
+          await bot.answerCallbackQuery(cq.id, { text: "Skipped" }).catch(() => {});
+          await bot.editMessageText(cq.message.text + "\n\n❌ SKIPPED.", { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {});
+        } else { await bot.answerCallbackQuery(cq.id, { text: "This idea expired." }).catch(() => {}); }
+      } catch (e) { console.warn("[telegram cb]", e.message); }
+    });
     bot.onText(/\/start/, (m) => bot.sendMessage(m.chat.id, "📡 *Signal Engine*\n/signals – top setups\n/stats – track record", { parse_mode: "Markdown" }));
     bot.onText(/\/signals?$/, async (m) => { const { tf, signals } = await scanMarket(SIGNAL_TF); const top = signals.filter((s) => s.direction !== "NEUTRAL" && !s.error).slice(0, 8); bot.sendMessage(m.chat.id, top.length ? `📡 *Signals* (${tf})\n\n` + top.map((s) => `*${s.symbol}* ${s.direction} ${s.confidence}% (${s.entry.status})\nEntry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)} · SL ${fmtUsd(s.stop.priceUsd)}\n${s.targets.map((t) => `${t.name} ${fmtUsd(t.priceUsd)} ${t.etaLabel}`).join(", ")}`).join("\n\n") : `No ${tf} setups now.`, { parse_mode: "Markdown" }); });
     bot.onText(/\/stats/, async (m) => { const s = await computeStats(); bot.sendMessage(m.chat.id, `📈 *Track record*\nWin rate: ${s.winRatePct ?? "-"}% (${s.wins}/${s.decided})\nTP1 ${s.tp1RatePct ?? "-"}% · TP2 ${s.tp2RatePct ?? "-"}% · TP3 ${s.tp3RatePct ?? "-"}%\nAvg R: ${s.avgResultR ?? "-"} · Open: ${s.open}${s.durable ? "" : "\n(in-memory - set DATABASE_URL to persist)"}`, { parse_mode: "Markdown" }); });

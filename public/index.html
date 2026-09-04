@@ -103,6 +103,15 @@
               <option value="scaleout">Scale out 50/25/25 (ride to TP3)</option>
             </select>
           </div>
+          <div class="mb-2 mt-3 rounded-lg border border-edge bg-ink/40 p-3">
+            <label class="flex items-center gap-2 text-sm text-slate-200"><input id="set-approval" type="checkbox" class="h-4 w-4" /> <b>📲 Ask me on Telegram before each trade</b></label>
+            <p class="mt-1 text-[11px] text-slate-500">On each ≥95% setup you get a message with the confirmations, timeframe, and "if you put $X, TP1 = +$Y - take it?" with Yes/No buttons. On approval it's tracked and you get a message when TP1 hits.</p>
+            <div class="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-300">
+              <label class="flex items-center gap-1">$ per trade <input id="set-position" type="number" min="1" value="20" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+              <label class="flex items-center gap-1">Capital $ <input id="set-capital" type="number" min="1" value="200" class="w-24 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+              <span id="set-tg" class="text-xs"></span>
+            </div>
+          </div>
           <div class="flex flex-wrap gap-2">
             <button id="set-save" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
             <button id="set-test" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">Test connection</button>

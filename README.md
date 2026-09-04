@@ -157,6 +157,27 @@ cause.
 
 Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `GET /api/testnet/trades`.
 
+## Ask-before-you-trade on Telegram
+
+Turn on **Settings → "Ask me on Telegram before each trade"** and set your **$ per trade** and
+**capital**. Then on every **≥95%** setup the bot messages you:
+
+> 🔔 Trade idea - BTC LONG (1h) · Confidence 96% · quality Blue-chip
+> ✅ Confirmed by: Uptrend, MACD momentum, ADX 31, Higher timeframe (4h) agrees
+> Entry $65,000-$65,200 · Stop $63,900 · TP1 $66,300 (+2.0%)
+> 💵 If you put **$20**: TP1 → **+$0.40**, stop → **-$0.34** · R:R 1:1
+> [📈 Open chart]  **Take this trade?**  [✅ Take $20] [❌ Skip]
+
+Tap **Take** → it's tracked and you get **"🎯 TP1 hit! +$0.40 profit"** when it lands (and it
+closes at TP1, per the exit style). Tap **Skip** → nothing happens. First message your bot
+**/start** once so it knows your chat.
+
+**Setup:** create a bot with **@BotFather** on Telegram, copy the token into `TELEGRAM_BOT_TOKEN`,
+deploy, then send your bot **/start**. The connection uses long-polling and **auto-reconnects**.
+
+> The chart is sent as a **TradingView link** (works everywhere). Rendered image screenshots need
+> a headless browser on the server - ask and I can add that.
+
 ## Forex Bot (OANDA v20) - full setup guide
 
 A separate **💱 Forex Bot** tab trades FX through **OANDA** (a regulated broker with a
