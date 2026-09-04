@@ -159,14 +159,22 @@ Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `GET /api/testne
 
 ## Ask-before-you-trade on Telegram
 
-Turn on **Settings → "Ask me on Telegram before each trade"** and set your **$ per trade** and
-**capital**. Then on every **≥95%** setup the bot messages you:
+Turn on **Settings → "Ask me on Telegram before each trade"** and set your **$ per trade**,
+**leverage** and **capital**. Then on every **≥95%**, still-enterable setup the bot messages you:
 
-> 🔔 Trade idea - BTC LONG (1h) · Confidence 96% · quality Blue-chip
-> ✅ Confirmed by: Uptrend, MACD momentum, ADX 31, Higher timeframe (4h) agrees
-> Entry $65,000-$65,200 · Stop $63,900 · TP1 $66,300 (+2.0%)
-> 💵 If you put **$20**: TP1 → **+$0.40**, stop → **-$0.34** · R:R 1:1
-> [📈 Open chart]  **Take this trade?**  [✅ Take $20] [❌ Skip]
+> 🟢 **LONG BTC/USDT** · 1-Hour
+> 🔥 Confidence **96%** · Blue-chip · RISK_ON
+> 🕐 fresh as of 01:45 SL · now $64,010
+> ✅ **ENTER NOW** — price is in the zone
+> 📍 **Entry Zone** $63,800 – $64,100
+> 🛑 **Stop Loss** $63,200 (-1.17%) → **-$4.68**
+> 🎯 **TP1** $64,750 (+1.25%) ~2h → **+$5** · TP2 → +$9.60 · TP3 → +$14.40
+> _(profit on $20 at 20x = $400 notional)_
+> ⚠️ At 20x a ~5% move against you = liquidation. The stop is tighter than that.
+> [📈 Open chart]  **Take this trade?**  [✅ Take $20 (20x)] [❌ Skip]
+
+The **$ profit/loss** are calculated on your position at your **leverage** (default 20x). Lower the
+leverage in Settings if that feels too aggressive — at 20x a ~5% adverse move is a liquidation.
 
 Tap **Take** → it's tracked and you get **"🎯 TP1 hit! +$0.40 profit"** when it lands (and it
 closes at TP1, per the exit style). Tap **Skip** → nothing happens. First message your bot
@@ -177,6 +185,32 @@ deploy, then send your bot **/start**. The connection uses long-polling and **au
 
 > The chart is sent as a **TradingView link** (works everywhere). Rendered image screenshots need
 > a headless browser on the server - ask and I can add that.
+
+### You trade by hand — so only *fresh* signals are pushed
+
+The website auto-trades the instant a signal fires; you can't. If a message reached you after the
+price had already run to TP1, entering then would be **buying the top** — the exact way to get
+stuck and lose. So Telegram **never pushes a stale setup**:
+
+- Every alert/proposal is gated to an **enterable** window — `✅ ENTER NOW` (price is in the zone)
+  or `⏳ WAIT` (a pullback into the zone is coming, you have time). Anything the price already ran
+  past (`CHASE`/missed, or TP1 already hit) is **dropped**, not sent.
+- Each card carries a **freshness stamp** (`🕐 fresh as of HH:MM SL`) and shows the entry as a
+  **ZONE (a range)**, not a single price — so a small move while you're reading it still leaves you
+  a valid entry.
+
+### Commands (built to look like the website)
+
+| Command | What it does |
+|---|---|
+| `/signals` | Compact list of **≥95%** setups you can still enter (`✅ now` / `⏳ wait`), with timeframe, entry zone and the **+$ on TP1** at your leverage |
+| `/fresh` | Only the **enter-right-now** setups, as full cards |
+| `/signal BTC` | Full card for one coin (any confidence, so you can look one up) |
+| `/tf 15m\|1h\|4h\|1d` | Change the timeframe the commands use |
+| `/stats` | Track record (win rate, TP hit rates, avg R) |
+| `/help` | The command list |
+
+Timeframes read in words — `15-min`, `1-Hour`, `4-Hour`, `Daily`.
 
 ## Forex Bot (OANDA v20) - full setup guide
 

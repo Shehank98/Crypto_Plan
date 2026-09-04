@@ -1105,6 +1105,9 @@ const proposals = new Map();  // key symbol|tf|dir -> plan {profit, loss, pos, g
 const approved = new Map();   // approved trades pending a TP1 alert
 const proposedAt = new Map(); // cooldown per key
 const PROPOSE_COOLDOWN = 3 * 3600_000;
+const TF_LABEL = { "15m": "15-min", "1h": "1-Hour", "4h": "4-Hour", "1d": "Daily" };
+function slNow() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
+const WIN_LINE = { OPEN: "✅ *ENTER NOW* — price is in the zone", WAIT: "⏳ Wait for a pullback into the zone", CHASE: "⚠️ Extended — only on a small pullback", CLOSED: "⛔ Missed — wait for the next setup" };
 // A clean signal card for Telegram, with 20x-leverage profit/loss projections.
 function fmtSignalCard(s) {
   const long = s.direction === "LONG";
@@ -1114,8 +1117,10 @@ function fmtSignalCard(s) {
   const tvLink = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}${QUOTE}`;
   const tps = s.targets.map((t, i) => `   *TP${i + 1}*  ${fmtUsd(t.priceUsd)}  (+${t.gainPct}%)  ${t.etaLabel}  →  *+$${proj(t.gainPct)}*`).join("\n");
   const liqPct = round(100 / lev, 1);
-  return `${dot} *${s.direction}  ${s.symbol}/${QUOTE}*   ·  ${s.tf}\n`
-    + `🔥 High-confidence *${s.confidence}%*  ·  ${s.quality?.tier || "-"}  ·  ${marketRegime.tier}\n\n`
+  return `${dot} *${s.direction}  ${s.symbol}/${QUOTE}*   ·  ${TF_LABEL[s.tf] || s.tf}\n`
+    + `🔥 Confidence *${s.confidence}%*  ·  ${s.quality?.tier || "-"}  ·  ${marketRegime.tier}\n`
+    + `🕐 fresh as of ${slNow()} · now ${fmtUsd(s.priceUsd)}\n`
+    + `${(WIN_LINE[s.entry.window] || "")}\n\n`
     + `📍 *Entry Zone*\n   ${fmtUsd(s.entry.low)}  –  ${fmtUsd(s.entry.high)}\n\n`
     + `🛑 *Stop Loss*\n   ${fmtUsd(s.stop.priceUsd)}  (-${s.stop.riskPct}%)   →  *-$${proj(s.stop.riskPct)}*\n\n`
     + `🎯 *Targets*  _(profit on $${pos} at ${lev}x = $${notional} notional)_\n${tps}\n\n`
@@ -1124,9 +1129,42 @@ function fmtSignalCard(s) {
     + `✅ *Why:* ${(s.reasons || []).slice(0, 4).join(", ")}\n`
     + `[📈 Open chart](${tvLink})`;
 }
+// One-line compact row for the /signals list (mirrors a website signal card).
+function fmtSignalRow(s) {
+  const dot = s.direction === "LONG" ? "🟢" : "🔴";
+  const win = s.entry.window === "OPEN" ? "✅ now" : s.entry.window === "WAIT" ? "⏳ wait" : s.entry.window === "CHASE" ? "⚠️ extended" : "⛔ missed";
+  const prof = round((settings.positionUsd * Math.max(1, settings.leverage) * s.targets[0].gainPct) / 100, 2);
+  return `${dot} *${s.symbol}* ${s.direction} · ${s.confidence}% · ${win}\n`
+    + `   ${TF_LABEL[s.tf] || s.tf} · Entry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)} · TP1 *+$${prof}* · /signal ${s.symbol}`;
+}
+// The command timeframe (changed with /tf). Starts at the engine's main timeframe.
+let cmdTf = SIGNAL_TF;
+// High-conviction, still-actionable signals for the Telegram commands. freshOnly =
+// only OPEN (enter right now); otherwise OPEN + WAIT (a pullback entry is coming).
+async function tgSignals(tf, { freshOnly = false, minConf = TRACK_MIN_CONFIDENCE, limit = 8 } = {}) {
+  const { signals } = await scanMarket(tf);
+  return signals.filter((s) => {
+    if (s.error || s.direction === "NEUTRAL" || !s.entry || !s.targets) return false;
+    if (s.confidence < minConf) return false;
+    if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
+    if (freshOnly) return s.entry.window === "OPEN";
+    return s.entry.window === "OPEN" || s.entry.window === "WAIT";
+  }).slice(0, limit);
+}
+const TG_HELP = "📡 *Signal Engine — commands*\n\n"
+  + "/signals – top high-accuracy setups you can still enter\n"
+  + "/fresh – only the ones to *enter right now*\n"
+  + "/signal `SYMBOL` – full card for one coin (e.g. /signal BTC)\n"
+  + "/tf `15m|1h|4h|1d` – change the timeframe (now: " + "%TF%" + ")\n"
+  + "/stats – track record (win rate)\n"
+  + "/help – this list\n\n"
+  + "_Only ≥95% setups reach here — the same bar as the Track Record. Every card shows the entry ZONE (a range), so a small move while you read it still lets you get in._";
 async function proposeTrade(s) {
   if (!settings.tgApproval || !bot || chats.size === 0) return;
   if (s.direction !== "LONG" && s.direction !== "SHORT") return;
+  // FRESHNESS: you trade these by hand, so never propose one you're already late for.
+  // OPEN = enter now, WAIT = a pullback is coming (you have time). CHASE/CLOSED = missed.
+  if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return;
   if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") return; // don't propose longs when risk-off
   const key = `${s.symbol}|${s.tf}|${s.direction}`;
   if (Date.now() - (proposedAt.get(key) || 0) < PROPOSE_COOLDOWN) return;
@@ -1174,9 +1212,48 @@ function startTelegram() {
         } else { await bot.answerCallbackQuery(cq.id, { text: "This idea expired." }).catch(() => {}); }
       } catch (e) { console.warn("[telegram cb]", e.message); }
     });
-    bot.onText(/\/start/, (m) => bot.sendMessage(m.chat.id, "📡 *Signal Engine*\n/signals – top setups\n/stats – track record", { parse_mode: "Markdown" }));
-    bot.onText(/\/signals?$/, async (m) => { const { tf, signals } = await scanMarket(SIGNAL_TF); const top = signals.filter((s) => s.direction !== "NEUTRAL" && !s.error).slice(0, 8); bot.sendMessage(m.chat.id, top.length ? `📡 *Signals* (${tf})\n\n` + top.map((s) => `*${s.symbol}* ${s.direction} ${s.confidence}% (${s.entry.status})\nEntry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)} · SL ${fmtUsd(s.stop.priceUsd)}\n${s.targets.map((t) => `${t.name} ${fmtUsd(t.priceUsd)} ${t.etaLabel}`).join(", ")}`).join("\n\n") : `No ${tf} setups now.`, { parse_mode: "Markdown" }); });
-    bot.onText(/\/stats/, async (m) => { const s = await computeStats(); bot.sendMessage(m.chat.id, `📈 *Track record*\nWin rate: ${s.winRatePct ?? "-"}% (${s.wins}/${s.decided})\nTP1 ${s.tp1RatePct ?? "-"}% · TP2 ${s.tp2RatePct ?? "-"}% · TP3 ${s.tp3RatePct ?? "-"}%\nAvg R: ${s.avgResultR ?? "-"} · Open: ${s.open}${s.durable ? "" : "\n(in-memory - set DATABASE_URL to persist)"}`, { parse_mode: "Markdown" }); });
+    const help = () => TG_HELP.replace("%TF%", TF_LABEL[cmdTf] || cmdTf);
+    bot.onText(/^\/(start|help)\b/, (m) => bot.sendMessage(m.chat.id, help(), { parse_mode: "Markdown" }));
+    // /signals — compact, website-style list of setups you can still enter (OPEN + WAIT).
+    bot.onText(/^\/signals\b/, async (m) => {
+      try {
+        const top = await tgSignals(cmdTf);
+        const body = top.length
+          ? `📡 *Signals* · ${TF_LABEL[cmdTf] || cmdTf} · ${slNow()}\n_≥95% only · ✅ now / ⏳ wait for pullback_\n\n` + top.map(fmtSignalRow).join("\n\n") + `\n\n_Tap /signal SYMBOL for the full card._`
+          : `No high-accuracy ${TF_LABEL[cmdTf] || cmdTf} setups you can enter right now. Try /tf 1h or check back soon.`;
+        bot.sendMessage(m.chat.id, body, { parse_mode: "Markdown", disable_web_page_preview: true });
+      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't scan just now — try again in a moment."); }
+    });
+    // /fresh — only the ones to ENTER RIGHT NOW, as full cards (freshness-first).
+    bot.onText(/^\/fresh\b/, async (m) => {
+      try {
+        const top = await tgSignals(cmdTf, { freshOnly: true, limit: 4 });
+        if (!top.length) return bot.sendMessage(m.chat.id, `Nothing to enter *right now* on ${TF_LABEL[cmdTf] || cmdTf}. When a signal is in its zone I'll list it here (and message you if approvals are on).`, { parse_mode: "Markdown" });
+        bot.sendMessage(m.chat.id, `⚡ *Enter-now setups* · ${slNow()}`, { parse_mode: "Markdown" });
+        for (const s of top) await bot.sendMessage(m.chat.id, fmtSignalCard(s), { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {});
+      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't scan just now — try again in a moment."); }
+    });
+    // /signal SYMBOL — full card for one coin (any confidence, so you can look one up).
+    // (Plural /signals is handled above; this only matches "/signal" then an optional symbol.)
+    bot.onText(/^\/signal(?:@\w+)?(?:\s+(\S+))?\s*$/, async (m, mt) => {
+      try {
+        if (!mt[1]) return bot.sendMessage(m.chat.id, "Usage: /signal SYMBOL  (e.g. /signal BTC). For the full list: /signals");
+        const base = mt[1].toUpperCase().replace(/USDT$/, "");
+        const { signals } = await scanMarket(cmdTf);
+        const s = signals.find((x) => (x.base || x.symbol) === base || x.symbol === base);
+        if (!s || s.error || !s.entry || !s.targets) return bot.sendMessage(m.chat.id, `No ${base} setup on ${TF_LABEL[cmdTf] || cmdTf} right now (it may not be in the scanned universe, or it's NEUTRAL).`);
+        bot.sendMessage(m.chat.id, fmtSignalCard(s), { parse_mode: "Markdown", disable_web_page_preview: true });
+      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't fetch that one — try again in a moment."); }
+    });
+    // /tf 1h — change the timeframe used by the commands above.
+    bot.onText(/^\/tf(?:\s+(\S+))?/, (m, mt) => {
+      const want = (mt[1] || "").toLowerCase();
+      if (!want) return bot.sendMessage(m.chat.id, `Timeframe is *${TF_LABEL[cmdTf] || cmdTf}*. Change it: /tf 15m · /tf 1h · /tf 4h · /tf 1d`, { parse_mode: "Markdown" });
+      if (!TF_MINUTES[want]) return bot.sendMessage(m.chat.id, "Use one of: 15m, 1h, 4h, 1d");
+      cmdTf = want; touchTf(want);
+      bot.sendMessage(m.chat.id, `✅ Timeframe set to *${TF_LABEL[cmdTf] || cmdTf}*. Try /signals`, { parse_mode: "Markdown" });
+    });
+    bot.onText(/^\/stats\b/, async (m) => { const s = await computeStats(); bot.sendMessage(m.chat.id, `📈 *Track record*\nWin rate: ${s.winRatePct ?? "-"}% (${s.wins}/${s.decided})\nTP1 ${s.tp1RatePct ?? "-"}% · TP2 ${s.tp2RatePct ?? "-"}% · TP3 ${s.tp3RatePct ?? "-"}%\nAvg R: ${s.avgResultR ?? "-"} · Open: ${s.open}${s.durable ? "" : "\n(in-memory - set DATABASE_URL to persist)"}`, { parse_mode: "Markdown" }); });
     bot.on("polling_error", (e) => console.warn("[telegram]", e.message));
     console.log("[telegram] started");
   } catch (e) { console.warn("[telegram] failed:", e.message); }
@@ -1188,6 +1265,8 @@ async function signalAlerts() {
   for (const s of signals) {
     // Only HIGH-ACCURACY setups (>=95%, same bar as the Track Record) reach Telegram.
     if (s.error || s.direction === "NEUTRAL" || !s.entry || !s.targets || s.confidence < TRACK_MIN_CONFIDENCE) continue;
+    // Only push a signal you can still act on. Skip anything the price already ran past.
+    if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") continue;
     if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
     if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") continue;
     const key = `${s.symbol}:${s.direction}`;
@@ -1241,4 +1320,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow };
