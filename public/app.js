@@ -164,6 +164,24 @@ function tp1Progress(x) {
   return Math.max(0, Math.min(100, (done / span) * 100));
 }
 
+// --- Sri Lanka time (Asia/Colombo, UTC+5:30) + durations ---
+const SL_TZ = "Asia/Colombo";
+function slTime(iso) {
+  if (!iso) return "—";
+  try { return new Date(iso).toLocaleString("en-GB", { timeZone: SL_TZ, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true }); }
+  catch (e) { return "—"; }
+}
+function fmtDur(min) {
+  if (!Number.isFinite(min) || min < 0) return "—";
+  if (min < 60) return `${Math.round(min)}m`;
+  if (min < 1440) return `${(min / 60).toFixed(1)}h`;
+  return `${(min / 1440).toFixed(1)}d`;
+}
+// Minutes between two ISO timestamps.
+function minsBetween(a, b) { if (!a || !b) return null; const m = (new Date(b).getTime() - new Date(a).getTime()) / 60000; return Number.isFinite(m) ? m : null; }
+// Projected clock time (SL) that TP1 is estimated to hit: entered + eta minutes.
+function etaClock(enteredIso, etaMin) { if (!enteredIso || !Number.isFinite(etaMin)) return "—"; return slTime(new Date(new Date(enteredIso).getTime() + etaMin * 60000)); }
+
 function renderTrackedFiltered() {
   const open = trackFilter(lastTrack.open);
   const recent = trackFilter(lastTrack.recent);
@@ -173,11 +191,22 @@ function renderTrackedFiltered() {
     const gain = movePct(x.entry_mid, x.currentPrice, long);        // current gain %
     const toTp1 = movePct(x.currentPrice, x.tp1, long);             // % still needed to TP1
     const prog = tp1Progress(x);
+    const startedAt = x.entered_at || x.created_at;                 // when the trade began (or was logged)
+    // Estimated TP1: if already hit, show actual; else projected clock + remaining duration.
+    let etaCell;
+    if (x.tp1_hit && x.tp1_at) {
+      etaCell = `<span class="text-emerald-400">hit ${slTime(x.tp1_at)}</span><br><span class="text-slate-500">est ${fmtDur(x.eta1_min)}</span>`;
+    } else {
+      etaCell = `<span class="text-slate-300">~${etaClock(startedAt, x.eta1_min)}</span><br><span class="text-slate-500">in ${fmtDur(x.eta1_min)}</span>`;
+    }
     return `<tr class="border-b border-edge/60">
       <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
       <td class="py-2">${tfPill(x.tf)}</td>
       <td class="py-2"><span class="pill ${long ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
       <td class="py-2 ${STATUS_CLS[x.status]}">${x.status}${x.tp1_hit ? " ·TP1" : ""}${x.tp2_hit ? "·TP2" : ""}</td>
+      <td class="py-2 text-right tabular-nums text-slate-200">${usd(x.entry_mid)}</td>
+      <td class="py-2 text-xs text-slate-400 whitespace-nowrap">${x.entered_at ? slTime(x.entered_at) : slTime(x.created_at) + " <span class='text-slate-600'>(logged)</span>"}</td>
+      <td class="py-2 text-xs whitespace-nowrap">${etaCell}</td>
       <td class="py-2 text-right tabular-nums ${gain > 0 ? "text-emerald-400" : gain < 0 ? "text-rose-400" : "text-slate-400"}">${gain != null ? (gain > 0 ? "+" : "") + gain + "%" : "—"}</td>
       <td class="py-2 text-right tabular-nums ${x.openR > 0 ? "text-emerald-400" : x.openR < 0 ? "text-rose-400" : "text-slate-400"}">${x.openR != null ? (x.openR > 0 ? "+" : "") + x.openR + "R" : "—"}</td>
       <td class="py-2" style="min-width:120px">
@@ -189,25 +218,41 @@ function renderTrackedFiltered() {
     </tr>`;
   }).join("");
   $("open-table").innerHTML = open.length
-    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Status</th><th class="text-right">Gain</th><th class="text-right">Open R</th><th>Progress → TP1</th></tr></thead><tbody>${openRows}</tbody>`
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Status</th><th class="text-right">Entry</th><th>Entered (SL)</th><th>Est → TP1</th><th class="text-right">Gain</th><th class="text-right">Open R</th><th>Progress → TP1</th></tr></thead><tbody>${openRows}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No open tracked signals for this filter. High-confidence setups are logged automatically.</td></tr></tbody>';
 
   const recRows = recent.map((x) => {
     const long = x.direction === "LONG";
     const riskPct = x.entry_mid && x.stop ? Math.abs(x.entry_mid - x.stop) / x.entry_mid * 100 : null;
     const gainPct = x.result_r != null && riskPct != null ? round(x.result_r * riskPct, 2) : null;
+    // Estimated vs actual time to TP1.
+    const actualMin = x.tp1_hit ? minsBetween(x.entered_at, x.tp1_at) : null;
+    const est = Number(x.eta1_min);
+    let evaCell;
+    if (actualMin != null && Number.isFinite(est) && est > 0) {
+      const ratio = actualMin / est;
+      const cls = ratio <= 1.25 ? "text-emerald-400" : ratio <= 2 ? "text-amber-400" : "text-rose-400";
+      evaCell = `<span class="text-slate-500">est ${fmtDur(est)}</span> · <span class="${cls}">act ${fmtDur(actualMin)}</span>`;
+    } else if (actualMin != null) {
+      evaCell = `<span class="text-slate-300">act ${fmtDur(actualMin)}</span>`;
+    } else {
+      evaCell = `<span class="text-slate-600">— no TP1</span>`;
+    }
     return `<tr class="border-b border-edge/60">
       <td class="py-2 font-semibold" style="color:${coinColor(x.symbol)}">${x.symbol}</td>
       <td class="py-2">${tfPill(x.tf)}</td>
       <td class="py-2"><span class="pill ${long ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${x.direction}</span></td>
+      <td class="py-2 text-right tabular-nums text-slate-200">${usd(x.entry_mid)}</td>
+      <td class="py-2 text-xs text-slate-400 whitespace-nowrap">${slTime(x.entered_at || x.created_at)}</td>
       <td class="py-2 ${STATUS_CLS[x.status]}">${x.status}${x.tp3_hit ? " ·TP3" : x.tp2_hit ? " ·TP2" : x.tp1_hit ? " ·TP1" : ""}</td>
+      <td class="py-2 text-xs whitespace-nowrap">${evaCell}</td>
       <td class="py-2 text-right tabular-nums ${gainPct > 0 ? "text-emerald-400" : gainPct < 0 ? "text-rose-400" : "text-slate-400"}">${gainPct != null ? (gainPct > 0 ? "+" : "") + gainPct + "%" : "—"}</td>
       <td class="py-2 text-right tabular-nums ${x.result_r > 0 ? "text-emerald-400" : x.result_r < 0 ? "text-rose-400" : "text-slate-400"}">${x.result_r != null ? (x.result_r > 0 ? "+" : "") + x.result_r + "R" : "—"}</td>
-      <td class="py-2 text-right text-xs text-slate-500">${x.closed_at ? new Date(x.closed_at).toLocaleString() : ""}</td>
+      <td class="py-2 text-right text-xs text-slate-500 whitespace-nowrap">${slTime(x.closed_at)}</td>
     </tr>`;
   }).join("");
   $("recent-table").innerHTML = recent.length
-    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th>Result</th><th class="text-right">Gain</th><th class="text-right">R</th><th class="text-right">Closed</th></tr></thead><tbody>${recRows}</tbody>`
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>TF</th><th>Dir</th><th class="text-right">Entry</th><th>Entered (SL)</th><th>Result</th><th>Est vs Actual → TP1</th><th class="text-right">Gain</th><th class="text-right">R</th><th class="text-right">Closed (SL)</th></tr></thead><tbody>${recRows}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No closed results for this filter yet.</td></tr></tbody>';
 }
 
