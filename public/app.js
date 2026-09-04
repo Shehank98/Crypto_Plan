@@ -30,6 +30,14 @@ function seg(el, items, active, on) {
   el.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => on(b.dataset.v)));
 }
 
+// Coin quality (BTC/ETH-like stability): liquidity + volatility.
+const QCLS = { "Blue-chip": "bg-sky-900/60 text-sky-200", "Solid": "bg-emerald-900/50 text-emerald-200", "Moderate": "bg-amber-900/50 text-amber-200", "Speculative": "bg-rose-900/50 text-rose-200" };
+function fmtVol(n) { n = Number(n) || 0; return n >= 1e9 ? "$" + (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(0) + "M" : "$" + Math.round(n / 1e3) + "K"; }
+function qualityBadge(q) {
+  if (!q) return "";
+  return `<span class="pill ${QCLS[q.tier] || "bg-slate-800 text-slate-300"}" title="24h volume ${fmtVol(q.liquidityUsd)} · volatility ${q.atrPct ?? "?"}%/candle">${q.tier}</span>`;
+}
+
 // Live outcome badge for a card, from the signal's tracked state.
 function trackedBadge(t) {
   if (!t) return "";
@@ -66,7 +74,8 @@ function card(s) {
       <span class="pill border ${d.cls}">${s.direction} ${s.confidence}%</span>
     </div>
     <div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence}%;background:${d.bar}" class="h-full"></div></div>
-    <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "-"} · ADX ${ind.adx ?? "-"} · StochRSI ${ind.stochRsi ?? "-"} · MFI ${ind.mfi ?? "-"}</p>`;
+    <p class="mt-2 text-xs text-slate-500">${usd(s.priceUsd)} · RSI ${ind.rsi14 ?? "-"} · ADX ${ind.adx ?? "-"} · StochRSI ${ind.stochRsi ?? "-"} · MFI ${ind.mfi ?? "-"}</p>
+    ${s.quality ? `<div class="mt-1 flex items-center gap-1 text-xs">${qualityBadge(s.quality)}<span class="text-slate-600">vol ${fmtVol(s.liquidityUsd)} · ${s.quality.atrPct ?? "?"}%/candle</span></div>` : ""}`;
 
   if (s.direction === "NEUTRAL" || !s.entry) {
     return `<div class="card p-4 cursor-pointer hover:border-indigo-500/40" data-analyze="${s.symbol}" data-tf="${s.tf}" title="Click for full analysis">${head}<p class="mt-2 text-sm text-slate-400">${s.note || "Stand aside."}</p><div class="mt-2 flex items-center justify-between"><div class="flex flex-wrap gap-1">${chips}</div><div class="flex gap-1">${btBtn}${chartBtn}</div></div>${btRow}</div>`;
@@ -91,6 +100,7 @@ function card(s) {
 function render() {
   let list = last.signals || [];
   if (filter === "actionable") list = list.filter((s) => s.direction === "LONG" || s.direction === "SHORT");
+  else if (filter === "quality") list = list.filter((s) => (s.direction === "LONG" || s.direction === "SHORT") && s.quality && s.quality.score >= 3);
   else if (filter === "LONG" || filter === "SHORT") list = list.filter((s) => s.direction === filter);
   if (search) list = list.filter((s) => s.symbol.includes(search.toUpperCase()));
   $("signals").innerHTML = list.map(card).join("");
@@ -527,6 +537,7 @@ async function openAnalysis(sym, tfv) {
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <span class="pill border ${d.cls} text-sm">${s.direction} ${s.confidence ?? 0}%</span>
       <span class="text-sm text-slate-400">Price ${usd(s.priceUsd)}</span>
+      ${s.quality ? `${qualityBadge(s.quality)}<span class="text-xs text-slate-500">vol ${fmtVol(s.liquidityUsd)} · ${s.quality.atrPct ?? "?"}%/candle</span>` : ""}
       ${s.htf && s.htfDir ? `<span class="pill bg-slate-800 text-xs">${s.htfDir === s.direction ? "✅" : "⚠️"} ${s.htf} trend ${s.htfDir}</span>` : ""}
     </div>
     <div class="mb-4 h-2 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence ?? 0}%;background:${d.bar}" class="h-full"></div></div>
@@ -620,6 +631,8 @@ async function loadSettings() {
     $("set-usd2").textContent = s.tradeUsd;
     $("set-usd").value = s.tradeUsd;
     $("set-auto").checked = !!s.autoTrade;
+    $("set-quality").checked = !!s.qualityOnly;
+    $("set-hold").checked = !!s.holdThroughDips;
     $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
     $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
     let note = "";
@@ -648,7 +661,7 @@ async function loadTestnetTrades() {
     : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
 }
 async function saveSettings() {
-  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100 };
+  const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked };
   const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
   if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";
@@ -676,7 +689,7 @@ async function init() {
   tf = CONFIG.tf || "1h";
   drawTabs();
   seg($("tf-buttons"), (CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
-  seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
+  seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "quality", label: "⭐ Quality" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
   $("search").oninput = (e) => { search = e.target.value.trim(); render(); };
   drawTrackTf();
   $("track-search").oninput = (e) => { trackSearch = e.target.value.trim().toUpperCase(); renderTrackedFiltered(); };
@@ -700,7 +713,7 @@ async function init() {
 
 function drawSegs() {
   seg($("tf-buttons"), (CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t })), tf, (v) => { tf = v; drawSegs(); load(); });
-  seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
+  seg($("filter-buttons"), [{ v: "actionable", label: "Actionable" }, { v: "quality", label: "⭐ Quality" }, { v: "LONG", label: "Long" }, { v: "SHORT", label: "Short" }, { v: "all", label: "All" }], filter, (v) => { filter = v; drawSegs(); render(); });
 }
 
 init();

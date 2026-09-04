@@ -30,6 +30,12 @@ libraries).
 3. **Trade plan:** entry zone around the EMA20/VWAP pullback, stop beyond the recent swing
    (± ATR), TP1/2/3 at 1R/2R/3R, ETA from ATR velocity, and a drift+ATR price forecast.
 
+**Coin quality (stability):** every coin is rated **Blue-chip / Solid / Moderate / Speculative**
+from its **24h liquidity** (USDT volume) and **volatility** (ATR% per candle) - the more
+BTC/ETH-like (deep liquidity, low volatility), the higher the tier. A **⭐ Quality** filter shows
+only Solid+ coins, and auto-trade can be restricted to them. Blue-chips ride out sideways chop
+and recover, so a **Hold-through-dips** option can drop the stop and hold a spot until TP1.
+
 Indicators (all dependency-free, reimplemented from scratch — inspired by **ta-lib** and
 **ccxt**, not depending on them): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI, **ADX**
 (trend strength), **Stochastic RSI** (entry timing), **CCI**, **Williams %R**, **OBV**

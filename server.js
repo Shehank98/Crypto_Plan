@@ -340,7 +340,7 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
 
   const obvTrend = obvArr ? (obvSlope > 0.02 ? "up" : obvSlope < -0.02 ? "down" : "flat") : null;
-  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200) };
+  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), atrPct: a && price ? round((a / price) * 100, 2) : null, adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200) };
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
@@ -450,6 +450,17 @@ function currentTfs() {
   return [...activeTfs.keys()];
 }
 
+// Coin "quality" = how BTC/ETH-like it is: high 24h liquidity + lower volatility
+// (ATR%). Blue-chips ride out sideways chop and recover; speculative coins may not.
+function qualityTier(volUsd, atrPct) {
+  const v = Number(volUsd) || 0;
+  const liq = v >= 300e6 ? 3 : v >= 80e6 ? 2 : v >= 15e6 ? 1 : 0;      // liquidity 0..3
+  const stab = atrPct == null ? 1 : atrPct < 1.5 ? 2 : atrPct < 4 ? 1 : 0; // stability 0..2
+  const score = liq + stab;                                             // 0..5
+  const tier = score >= 4 ? "Blue-chip" : score >= 3 ? "Solid" : score >= 2 ? "Moderate" : "Speculative";
+  return { liquidityUsd: Math.round(v), atrPct: atrPct == null ? null : round(atrPct, 2), score, tier };
+}
+
 const scanCache = {};
 let scanning = false;
 async function scanMarket(tf, force) {
@@ -469,7 +480,7 @@ async function scanMarket(tf, force) {
     for (let i = 0; i < universe.length; i += 8) {
       const batch = universe.slice(i, i + 8);
       const sigs = await Promise.all(batch.map((u) => signalFor(u.base, tf, fx, { htf, htfDir: htfMap ? htfMap.get(u.base) : undefined })));
-      sigs.forEach((s, j) => { if (batch[j]) s.changePct = round(batch[j].changePct, 2); });
+      sigs.forEach((s, j) => { if (batch[j]) { s.changePct = round(batch[j].changePct, 2); s.liquidityUsd = Math.round(batch[j].quoteVolume || 0); s.quality = qualityTier(batch[j].quoteVolume, s.indicators?.atrPct); } });
       results.push(...sigs);
     }
     const rank = (s) => (s.error || s.direction === "NEUTRAL" ? -1 : s.confidence);
@@ -696,6 +707,8 @@ const settings = {
   tradeUsd: Number(process.env.TRADE_USD || 100),
   testnetBase: process.env.BINANCE_TESTNET_BASE || "https://testnet.binance.vision",
   proxyUrl: process.env.BINANCE_PROXY_URL || "", // route testnet calls via an allowed region
+  qualityOnly: !/^(0|false|no|off)$/i.test(process.env.QUALITY_ONLY || "true"), // only trade blue-chip/solid coins
+  holdThroughDips: /^(1|true|yes|on)$/i.test(process.env.HOLD_THROUGH_DIPS || ""), // no stop: hold a sideways spot until TP1
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -769,6 +782,7 @@ async function maybeAutoTrade(s) {
   if (!settings.autoTrade || !tnConfigured()) return;
   if (s.direction !== "LONG" || !s.entry || !s.targets) return;            // spot = long only
   if (s.confidence < TRACK_MIN_CONFIDENCE) return;                          // >=95% only
+  if (settings.qualityOnly && (!s.quality || s.quality.score < 3)) return;  // blue-chip/solid only
   const symbol = s.symbol + QUOTE;
   if (await tstore.hasOpen(symbol)) return;                                 // one open trade per coin
   try {
@@ -776,9 +790,11 @@ async function maybeAutoTrade(s) {
     if (!buy.qty || !buy.avg) return;
     const gain1 = s.targets[0].gainPct || 1;                               // % from entry to TP1
     const riskPct = s.stop.riskPct || 1;                                   // % from entry to stop
-    const tp1 = buy.avg * (1 + gain1 / 100), stop = buy.avg * (1 - riskPct / 100);
-    await tstore.insert({ symbol, tf: s.tf, confidence: s.confidence, qty: buy.qty, entry_price: rp(buy.avg), tp1: rp(tp1), stop: rp(stop) });
-    console.log(`[testnet] BUY ${symbol} qty ${buy.qty} @ ${buy.avg} (TP1 ${rp(tp1)}, stop ${rp(stop)})`);
+    const tp1 = buy.avg * (1 + gain1 / 100);
+    // Hold-through-dips: no stop, ride a sideways spot until TP1 (quality coins recover).
+    const stop = settings.holdThroughDips ? null : buy.avg * (1 - riskPct / 100);
+    await tstore.insert({ symbol, tf: s.tf, confidence: s.confidence, qty: buy.qty, entry_price: rp(buy.avg), tp1: rp(tp1), stop: stop == null ? null : rp(stop) });
+    console.log(`[testnet] BUY ${symbol} qty ${buy.qty} @ ${buy.avg} (TP1 ${rp(tp1)}, stop ${stop == null ? "none/hold" : rp(stop)})`);
   } catch (e) { lastTnError = niceTnError(e); console.warn("[testnet] buy failed:", lastTnError); }
 }
 // Close open testnet trades at TP1 (profit) or stop (safety); record PnL.
@@ -790,7 +806,8 @@ async function manageTestnet(prices) {
     const base = t.symbol.replace(QUOTE, "");
     const P = prices.get(base);
     if (P == null) continue;
-    const reason = P >= t.tp1 ? "TP1" : P <= t.stop ? "STOP" : null;
+    // Close at TP1 (take profit) or the stop (safety). A null stop = hold-through-dips.
+    const reason = P >= t.tp1 ? "TP1" : t.stop != null && P <= t.stop ? "STOP" : null;
     if (!reason) continue;
     try {
       const free = await tnFree(base);
@@ -860,6 +877,11 @@ app.get("/api/analysis/:symbol", wrap(async (req, res) => {
     const d = await getOHLCV(base, tf, 210);
     if (d) signal = computeSignal(base, tf, d, fx, { htf, htfDir: perTf[htf].direction });
   }
+  // Attach coin quality (liquidity + volatility) to the headline signal.
+  if (signal && !signal.error) {
+    const tick = (await fetchTickers().catch(() => [])).find((t) => t.base === base);
+    if (tick) { signal.liquidityUsd = Math.round(tick.quoteVolume || 0); signal.quality = qualityTier(tick.quoteVolume, signal.indicators?.atrPct); }
+  }
   // Agreement score across timeframes.
   const dirs = Object.values(perTf).filter((p) => !p.error).map((p) => p.direction);
   const longs = dirs.filter((x) => x === "LONG").length, shorts = dirs.filter((x) => x === "SHORT").length;
@@ -886,13 +908,15 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
   if (typeof b.apiKey === "string" && b.apiKey.trim()) settings.apiKey = b.apiKey.trim();
   if (typeof b.apiSecret === "string" && b.apiSecret.trim()) settings.apiSecret = b.apiSecret.trim();
   if (typeof b.autoTrade === "boolean") settings.autoTrade = b.autoTrade;
+  if (typeof b.qualityOnly === "boolean") settings.qualityOnly = b.qualityOnly;
+  if (typeof b.holdThroughDips === "boolean") settings.holdThroughDips = b.holdThroughDips;
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
   if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
   if (typeof b.proxyUrl === "string") settings.proxyUrl = b.proxyUrl.trim();
