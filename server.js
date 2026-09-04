@@ -275,10 +275,19 @@ function computeSignal(base, tf, d, fx) {
   const stop = long ? Math.min(swingLow, entryLow - a) : Math.max(swingHigh, entryHigh + a);
   const risk = Math.abs(entryMid - stop);
   const tfMin = TF_MINUTES[tf] || 60, perCandle = a * 0.6;
-  const targets = [1, 2, 3].map((k) => { const tp = long ? entryMid + k * risk : entryMid - k * risk; const candles = perCandle > 0 ? Math.abs(tp - entryMid) / perCandle : Infinity; return { name: `TP${k}`, priceUsd: round(tp, 6), priceLkr: round(tp * fx, 2), rr: k, gainPct: round((Math.abs(tp - entryMid) / entryMid) * 100, 2), etaLabel: humanizeEta(candles * tfMin) }; });
+  const targets = [1, 2, 3].map((k) => { const tp = long ? entryMid + k * risk : entryMid - k * risk; const candles = perCandle > 0 ? Math.abs(tp - entryMid) / perCandle : Infinity; const etaMin = Number.isFinite(candles) ? Math.round(candles * tfMin) : null; return { name: `TP${k}`, priceUsd: round(tp, 6), priceLkr: round(tp * fx, 2), rr: k, gainPct: round((Math.abs(tp - entryMid) / entryMid) * 100, 2), etaMin, etaLabel: humanizeEta(candles * tfMin) }; });
   const inZone = price >= entryLow && price <= entryHigh;
   const status = inZone ? "READY" : long ? "WAIT for pullback to entry" : "WAIT for bounce to entry";
-  return { ...out, entry: { low: round(entryLow, 6), high: round(entryHigh, 6), mid: round(entryMid, 6), status, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: round(stop, 6), priceLkr: round(stop * fx, 2), riskPct: round((risk / entryMid) * 100, 2) }, targets, invalidation: long ? `Close below ${round(stop, 6)} invalidates the long.` : `Close above ${round(stop, 6)} invalidates the short.` };
+  // Plain-English rationale for each drawn level (shown on the chart's "why" panel).
+  const riskPct = round((risk / entryMid) * 100, 2);
+  const entryWhy = long
+    ? `Buy the pullback into the EMA20/VWAP zone (${round(entryLow, 6)}–${round(entryHigh, 6)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer — a tighter, higher-reward entry.`
+    : `Sell the bounce into the EMA20/VWAP zone (${round(entryLow, 6)}–${round(entryHigh, 6)}) instead of shorting the low. The trend is down, so a pop gives a better price with the stop closer.`;
+  const stopWhy = long
+    ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${round(a, 6)}). A close under here breaks the higher-low structure — the uptrend idea is wrong, so exit.`
+    : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${round(a, 6)}). A close over here breaks the lower-high structure — the downtrend idea is wrong, so exit.`;
+  const targetsWhy = `TP1/TP2/TP3 sit at 1×/2×/3× the ${riskPct}% risked to the stop (R-multiples). ETAs are projected from recent ATR speed (~${round(perCandle, 6)}/candle).`;
+  return { ...out, entry: { low: round(entryLow, 6), high: round(entryHigh, 6), mid: round(entryMid, 6), status, why: entryWhy, lowLkr: round(entryLow * fx, 2), highLkr: round(entryHigh * fx, 2) }, stop: { priceUsd: round(stop, 6), priceLkr: round(stop * fx, 2), riskPct, why: stopWhy }, targets, targetsWhy, invalidation: long ? `Close below ${round(stop, 6)} invalidates the long.` : `Close above ${round(stop, 6)} invalidates the short.` };
 }
 
 async function signalFor(base, tf, fx) {
@@ -395,22 +404,28 @@ async function initStore() {
     tp1 DOUBLE PRECISION, tp2 DOUBLE PRECISION, tp3 DOUBLE PRECISION,
     status VARCHAR(10) DEFAULT 'WAITING', tp1_hit BOOLEAN DEFAULT false, tp2_hit BOOLEAN DEFAULT false, tp3_hit BOOLEAN DEFAULT false,
     result_r DOUBLE PRECISION, note TEXT,
+    eta1_min DOUBLE PRECISION, eta2_min DOUBLE PRECISION, eta3_min DOUBLE PRECISION,
+    tp1_at TIMESTAMPTZ, tp2_at TIMESTAMPTZ, tp3_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(), entered_at TIMESTAMPTZ, closed_at TIMESTAMPTZ )`);
+  // Backfill columns on databases created before ETA tracking existed.
+  for (const col of ["eta1_min DOUBLE PRECISION", "eta2_min DOUBLE PRECISION", "eta3_min DOUBLE PRECISION", "tp1_at TIMESTAMPTZ", "tp2_at TIMESTAMPTZ", "tp3_at TIMESTAMPTZ"]) {
+    await pool.query(`ALTER TABLE tracked_signals ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
   console.log("[store] Postgres ready (durable tracking)");
 }
 
 const store = {
   async open(sig) {
     const t = sig.targets;
-    const row = { symbol: sig.symbol, tf: sig.tf, direction: sig.direction, confidence: sig.confidence, entry_low: sig.entry.low, entry_high: sig.entry.high, entry_mid: sig.entry.mid, stop: sig.stop.priceUsd, tp1: t[0].priceUsd, tp2: t[1].priceUsd, tp3: t[2].priceUsd };
+    const row = { symbol: sig.symbol, tf: sig.tf, direction: sig.direction, confidence: sig.confidence, entry_low: sig.entry.low, entry_high: sig.entry.high, entry_mid: sig.entry.mid, stop: sig.stop.priceUsd, tp1: t[0].priceUsd, tp2: t[1].priceUsd, tp3: t[2].priceUsd, eta1_min: t[0].etaMin ?? null, eta2_min: t[1].etaMin ?? null, eta3_min: t[2].etaMin ?? null };
     // Dedup: skip if an open one exists for symbol+direction+tf.
     if (useDb) {
       const { rows } = await pool.query("SELECT 1 FROM tracked_signals WHERE symbol=$1 AND direction=$2 AND tf=$3 AND status IN ('WAITING','ACTIVE') LIMIT 1", [row.symbol, row.direction, row.tf]);
       if (rows.length) return;
-      await pool.query(`INSERT INTO tracked_signals (symbol,tf,direction,confidence,entry_low,entry_high,entry_mid,stop,tp1,tp2,tp3) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [row.symbol, row.tf, row.direction, row.confidence, row.entry_low, row.entry_high, row.entry_mid, row.stop, row.tp1, row.tp2, row.tp3]);
+      await pool.query(`INSERT INTO tracked_signals (symbol,tf,direction,confidence,entry_low,entry_high,entry_mid,stop,tp1,tp2,tp3,eta1_min,eta2_min,eta3_min) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [row.symbol, row.tf, row.direction, row.confidence, row.entry_low, row.entry_high, row.entry_mid, row.stop, row.tp1, row.tp2, row.tp3, row.eta1_min, row.eta2_min, row.eta3_min]);
     } else {
       if (mem.some((m) => m.symbol === row.symbol && m.direction === row.direction && m.tf === row.tf && (m.status === "WAITING" || m.status === "ACTIVE"))) return;
-      mem.push({ id: memId++, status: "WAITING", tp1_hit: false, tp2_hit: false, tp3_hit: false, result_r: null, created_at: new Date().toISOString(), entered_at: null, closed_at: null, ...row });
+      mem.push({ id: memId++, status: "WAITING", tp1_hit: false, tp2_hit: false, tp3_hit: false, tp1_at: null, tp2_at: null, tp3_at: null, result_r: null, created_at: new Date().toISOString(), entered_at: null, closed_at: null, ...row });
     }
   },
   async open_rows() { if (useDb) return (await pool.query("SELECT * FROM tracked_signals WHERE status IN ('WAITING','ACTIVE') ORDER BY created_at DESC")).rows; return mem.filter((m) => m.status === "WAITING" || m.status === "ACTIVE"); },
@@ -436,10 +451,10 @@ function advance(t, P, now) {
     return null;
   }
   if (t.status === "ACTIVE") {
-    const upd = {};
-    if (!t.tp1_hit && reach(t.tp1)) upd.tp1_hit = true;
-    if (!t.tp2_hit && reach(t.tp2)) upd.tp2_hit = true;
-    if (reach(t.tp3)) { return { ...upd, tp3_hit: true, status: "WIN", result_r: 3, closed_at: new Date() }; }
+    const upd = {}; const nowD = new Date();
+    if (!t.tp1_hit && reach(t.tp1)) { upd.tp1_hit = true; upd.tp1_at = nowD; }
+    if (!t.tp2_hit && reach(t.tp2)) { upd.tp2_hit = true; upd.tp2_at = nowD; }
+    if (reach(t.tp3)) { return { ...upd, tp3_hit: true, tp3_at: nowD, status: "WIN", result_r: 3, closed_at: nowD }; }
     if (belowStop) { const won = t.tp1_hit || upd.tp1_hit; return { ...upd, status: won ? "WIN" : "LOSS", result_r: won ? (t.tp2_hit || upd.tp2_hit ? 2 : 1) : -1, closed_at: new Date() }; }
     const enteredMs = t.entered_at ? new Date(t.entered_at).getTime() : created;
     if ((now - enteredMs) / 60000 > MAX_HOLD_CANDLES * tfMin) {
@@ -478,6 +493,15 @@ async function monitor(prices) {
   }
 }
 
+// Newest tracked row per symbol|tf|direction — used to stamp live status onto
+// the market cards so you can see "in trade / TP1 hit / stopped" at a glance.
+async function trackedIndex() {
+  const rows = await store.recent(400); // newest-first
+  const m = new Map();
+  for (const t of rows) { const k = `${t.symbol}|${t.tf}|${t.direction}`; if (!m.has(k)) m.set(k, t); }
+  return m;
+}
+
 async function openFrom(data) {
   for (const s of data.signals) {
     if ((s.direction === "LONG" || s.direction === "SHORT") && s.confidence >= TRACK_MIN_CONFIDENCE && s.entry && s.targets) {
@@ -499,8 +523,26 @@ async function computeStats() {
     if (dd.length) byTf[tf] = { n: dd.length, winRatePct: pct(dd.filter((t) => t.status === "WIN").length, dd.length) };
   }
   const rs = closed.map((t) => t.result_r).filter((x) => Number.isFinite(x));
+  // ETA accuracy: for trades that actually reached TP1, compare the estimated
+  // time-to-TP1 (logged at signal time) with how long it really took.
+  const etaSamples = [];
+  for (const t of entered) {
+    const est = Number(t.eta1_min);
+    if (t.tp1_at && t.entered_at && Number.isFinite(est) && est > 0) {
+      const actual = (new Date(t.tp1_at).getTime() - new Date(t.entered_at).getTime()) / 60000;
+      if (actual >= 0) etaSamples.push({ est, act: actual });
+    }
+  }
+  let tp1Eta = null;
+  if (etaSamples.length) {
+    const estAvg = etaSamples.reduce((a, b) => a + b.est, 0) / etaSamples.length;
+    const actAvg = etaSamples.reduce((a, b) => a + b.act, 0) / etaSamples.length;
+    const onTime = etaSamples.filter((s) => s.act <= s.est * 1.25).length; // hit at/near or ahead of estimate
+    tp1Eta = { n: etaSamples.length, estMin: round(estAvg, 0), actualMin: round(actAvg, 0), estLabel: humanizeEta(estAvg), actualLabel: humanizeEta(actAvg), accuracyPct: round(100 * (1 - Math.min(1, Math.abs(actAvg - estAvg) / estAvg)), 0), onTimePct: round((onTime / etaSamples.length) * 100, 0) };
+  }
   return {
     durable: useDb,
+    tp1Eta,
     open: all.filter((t) => t.status === "WAITING" || t.status === "ACTIVE").length,
     tracked: all.length,
     decided: decided.length,
@@ -534,6 +576,17 @@ app.get("/api/signals", wrap(async (req, res) => {
   if (req.query.only === "actionable") signals = signals.filter((s) => s.direction !== "NEUTRAL" && !s.error);
   if (req.query.dir === "LONG" || req.query.dir === "SHORT") signals = signals.filter((s) => s.direction === req.query.dir);
   if (req.query.limit) signals = signals.slice(0, Number(req.query.limit));
+  // Stamp each actionable card with its live tracking outcome (status + TP hits + open R).
+  const [tidx, prices] = await Promise.all([trackedIndex().catch(() => new Map()), getTickerMap().catch(() => new Map())]);
+  signals = signals.map((s) => {
+    if (s.direction !== "LONG" && s.direction !== "SHORT") return s;
+    const t = tidx.get(`${s.symbol}|${s.tf}|${s.direction}`);
+    if (!t) return s;
+    const P = prices.get(s.symbol);
+    let openR = null;
+    if (P != null && t.entry_mid != null && t.stop != null && (t.status === "ACTIVE" || t.status === "WAITING")) openR = round((s.direction === "LONG" ? P - t.entry_mid : t.entry_mid - P) / Math.abs(t.entry_mid - t.stop), 2);
+    return { ...s, tracked: { status: t.status, tp1_hit: !!t.tp1_hit, tp2_hit: !!t.tp2_hit, tp3_hit: !!t.tp3_hit, result_r: t.result_r ?? null, openR, since: t.created_at } };
+  });
   res.json({ ...data, signals });
 }));
 

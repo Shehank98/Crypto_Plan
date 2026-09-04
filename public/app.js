@@ -27,6 +27,24 @@ function seg(el, items, active, on) {
   el.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => on(b.dataset.v)));
 }
 
+// Live outcome badge for a card, from the signal's tracked state.
+function trackedBadge(t) {
+  if (!t) return "";
+  const head = {
+    WAITING: `<span class="pill bg-amber-900/50 text-amber-200">⏳ Waiting for entry</span>`,
+    ACTIVE: `<span class="pill bg-sky-900/50 text-sky-200">🔵 In trade</span>`,
+    WIN: `<span class="pill bg-emerald-900/60 text-emerald-200">✅ WIN ${t.result_r > 0 ? "+" : ""}${t.result_r}R</span>`,
+    LOSS: `<span class="pill bg-rose-900/60 text-rose-200">🛑 Stopped ${t.result_r}R</span>`,
+    EXPIRED: `<span class="pill bg-slate-800 text-slate-400">⌛ Expired (no fill)</span>`,
+  }[t.status] || "";
+  const hits = [t.tp1_hit && "TP1", t.tp2_hit && "TP2", t.tp3_hit && "TP3"].filter(Boolean);
+  const hitPill = hits.length ? `<span class="pill bg-emerald-900/40 text-emerald-300">🎯 ${hits.join(" · ")} hit</span>` : "";
+  const live = (t.status === "ACTIVE" || t.status === "WAITING") && t.openR != null
+    ? `<span class="pill ${t.openR > 0 ? "bg-emerald-900/40 text-emerald-300" : t.openR < 0 ? "bg-rose-900/40 text-rose-300" : "bg-slate-800 text-slate-400"}">Open ${t.openR > 0 ? "+" : ""}${t.openR}R</span>`
+    : "";
+  return `<div class="mt-2 flex flex-wrap items-center gap-1">${head}${hitPill}${live}</div>`;
+}
+
 function card(s) {
   const d = DIR[s.direction] || DIR.NEUTRAL;
   if (s.error) return `<div class="card p-4 opacity-50"><div class="flex justify-between"><b style="color:${coinColor(s.symbol)}">${s.symbol}</b><span class="pill bg-slate-800">no data</span></div></div>`;
@@ -48,6 +66,7 @@ function card(s) {
   const f = s.forecast || {};
   return `<div class="card glow p-4">${head}
     <div class="mt-2 flex items-center justify-between text-xs"><span class="${readyCls} font-medium">${s.entry.status}</span><span class="text-slate-500">forecast ${f.horizon}: ${usd(f.priceUsd)}</span></div>
+    ${trackedBadge(s.tracked)}
     <div class="mt-2 space-y-1 rounded-lg border border-edge bg-ink/50 p-2">
       <div class="flex justify-between text-sm"><span class="text-slate-400">Entry</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} – ${usd(s.entry.high)}</span></div>
       <div class="flex justify-between text-sm"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${usd(s.stop.priceUsd)} <span class="text-slate-500">-${s.stop.riskPct}%</span></span></div>
@@ -87,6 +106,22 @@ function renderStats(s) {
     chip("Open", s.open),
   ].join(" ");
   $("track-note").textContent = s.durable ? "" : "· in-memory (set DATABASE_URL to persist across restarts)";
+}
+
+// Did the ETA estimates hold up? Compares logged estimate vs. actual time-to-TP1.
+function renderEta(s) {
+  const el = $("eta-panel");
+  const e = s.tp1Eta;
+  if (!e || !e.n) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.classList.remove("hidden");
+  const acc = e.accuracyPct;
+  const accCls = acc >= 75 ? "text-emerald-400" : acc >= 50 ? "text-amber-400" : "text-rose-400";
+  el.innerHTML = `
+    <h3 class="mb-1 text-sm font-semibold text-slate-300">⏱ ETA accuracy — do the time estimates hold up?</h3>
+    <p class="text-slate-400">Across <b class="text-slate-200">${e.n}</b> trade${e.n === 1 ? "" : "s"} that reached TP1: the engine estimated
+      <b class="text-slate-200">${e.estLabel}</b>, and it actually took <b class="text-slate-200">${e.actualLabel}</b>.
+      Timing accuracy <b class="${accCls}">${acc}%</b> · hit on/ahead of estimate <b class="text-slate-200">${e.onTimePct}%</b> of the time.</p>
+    <p class="mt-1 text-slate-500">ETAs are projected from ATR speed — treat them as a ballpark, not a countdown.</p>`;
 }
 
 function renderByTf(byTf) {
@@ -163,6 +198,7 @@ async function loadTrack() {
   try {
     const [s, t] = await Promise.all([api("/api/stats"), api("/api/tracked")]);
     renderStats(s);
+    renderEta(s);
     renderByTf(s.byTimeframe);
     lastTrack = t;
     renderTrackedFiltered();
@@ -188,6 +224,7 @@ async function openChart(sym, tfv) {
   const m = $("chart-modal"); m.classList.remove("hidden"); m.classList.add("flex");
   $("chart-title").innerHTML = `<span style="color:${coinColor(sym)}">${sym}</span> · ${tfv}`;
   $("chart-plan").innerHTML = "";
+  $("chart-why").classList.add("hidden"); $("chart-why").innerHTML = "";
   const el = $("chart"); el.innerHTML = "";
   closeChart._pending = sym + tfv;
   let data;
@@ -209,7 +246,7 @@ async function openChart(sym, tfv) {
   const closes = data.candles.map((k) => k.close), times = data.candles.map((k) => k.time);
   [[20, "#818cf8"], [50, "#22d3ee"], [200, "#f59e0b"]].forEach(([p, col]) => { const s = c.addLineSeries({ color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }); s.setData(emaSeries(closes, times, p)); });
   $("chart-legend").classList.remove("hidden");
-  $("chart-legend").innerHTML = `EMA <span style="color:#818cf8">20</span> <span style="color:#22d3ee">50</span> <span style="color:#f59e0b">200</span>`;
+  $("chart-legend").innerHTML = `EMA <span style="color:#818cf8">20</span> <span style="color:#22d3ee">50</span> <span style="color:#f59e0b">200</span> · <span style="color:#818cf8">┈ entry</span> <span style="color:#f43f5e">— stop</span> <span style="color:#10b981">┈ TP</span>`;
 
   const sig = (last.signals || []).find((x) => x.symbol === sym);
   if (sig && sig.entry) {
@@ -224,8 +261,20 @@ async function openChart(sym, tfv) {
       `<span class="pill bg-slate-800 text-rose-300">Stop ${usd(sig.stop.priceUsd)} (-${sig.stop.riskPct}%)</span>`,
       ...sig.targets.map((t) => `<span class="pill bg-slate-800 text-emerald-300">${t.name} +${t.gainPct}% · ${usd(t.priceUsd)} · ${t.etaLabel}</span>`),
     ].join(" ");
+    // "Why these lines" — how each level on the chart was decided.
+    const why = $("chart-why");
+    why.classList.remove("hidden");
+    why.innerHTML = `
+      <div class="mb-1 font-semibold text-slate-300">Why these lines — how the trade was decided</div>
+      <ul class="space-y-1.5">
+        <li><span class="font-medium" style="color:#818cf8">┈ Entry</span> — ${sig.entry.why || "pullback into the EMA20/VWAP zone."}</li>
+        <li><span class="font-medium" style="color:#f43f5e">— Stop</span> — ${sig.stop.why || "beyond the recent swing ±ATR."}</li>
+        <li><span class="font-medium" style="color:#10b981">┈ TP1/2/3</span> — ${sig.targetsWhy || "1R / 2R / 3R off your risk."}</li>
+      </ul>
+      <div class="mt-2 border-t border-edge pt-2 text-slate-500"><b class="text-slate-400">Direction call:</b> ${(sig.reasons || []).slice(0, 5).join(" · ") || "trend filter"}</div>`;
   } else {
     $("chart-plan").innerHTML = '<span class="pill bg-slate-800 text-slate-400">No active setup — chart for reference.</span>';
+    $("chart-why").classList.add("hidden");
   }
   c.timeScale().fitContent();
   // Backtest button runs the rules over history for this coin+timeframe.

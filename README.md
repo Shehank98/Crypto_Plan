@@ -34,9 +34,22 @@ Indicators (all dependency-free): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI,
 (trend strength — filters choppy markets to lift win rate) and **Stochastic RSI** (entry
 timing).
 
+**Live status on every card:** once a signal is logged, its card shows what happened next —
+**⏳ Waiting for entry**, **🔵 In trade**, **🎯 TP1/TP2/TP3 hit**, **✅ WIN +R**, or
+**🛑 Stopped** — plus the current **Open R** while it's live. So you don't just see the plan,
+you see whether it's working.
+
 **Confirm on a chart:** click **📈 Chart** on any signal for a candlestick chart
 (TradingView Lightweight Charts) with EMA 20/50/200 and the signal's **entry zone, stop and
-TP1/2/3 drawn as price lines** — so you can eyeball the setup before taking it.
+TP1/2/3 drawn as price lines**. Below the chart a **"Why these lines"** panel explains *how
+each level was decided* — why the entry sits at the EMA20/VWAP pullback, why the stop is
+beyond the swing ± ATR, and why the targets are at 1R/2R/3R — so you can judge the setup, not
+just take it on faith.
+
+**ETA accuracy:** every signal logs its **estimated** time-to-TP1; when the trade actually
+reaches TP1 the real elapsed time is recorded. The Track Record tab shows **estimated vs.
+actual** time and a **timing-accuracy %**, so you can see whether the ETAs hold up (they're an
+ATR-based ballpark, not a countdown).
 
 **Every timeframe you view is tracked:** switching the dashboard to 15m/4h adds it to the
 scan+track set, so its signals are logged and outcome-checked too (not just the default).
