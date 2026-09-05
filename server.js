@@ -169,13 +169,24 @@ async function getUsdLkr() {
 // Exchange adapters (minimal, ccxt-style). Each returns normalized data.
 // ===========================================================================
 // Binance GET with host failover; remembers the working host.
+// Tries a DIRECT connection first (works in most regions) and only falls back to
+// the proxy if direct fails - so a dead/slow saved proxy can never break data
+// that would fetch fine directly. Remembers whichever mode last worked.
 let binanceHost = null;
+let binanceViaProxy = false;
 async function binanceGet(pathname, params) {
   const hosts = binanceHost ? [binanceHost, ...BINANCE_HOSTS.filter((h) => h !== binanceHost)] : BINANCE_HOSTS;
+  const px = proxyCfg();
+  const direct = { cfg: {}, viaProxy: false };
+  const proxied = px.proxy ? { cfg: px, viaProxy: true } : null;
+  // Prefer the mode that worked last; always keep the other as a fallback.
+  const modes = binanceViaProxy && proxied ? [proxied, direct] : [direct, ...(proxied ? [proxied] : [])];
   let err;
-  for (const h of hosts) {
-    try { const r = await http.get(h + pathname, { params, ...proxyCfg() }); binanceHost = h; return r.data; }
-    catch (e) { err = e; }
+  for (const m of modes) {
+    for (const h of hosts) {
+      try { const r = await http.get(h + pathname, { params, ...m.cfg }); binanceHost = h; binanceViaProxy = m.viaProxy; return r.data; }
+      catch (e) { err = e; }
+    }
   }
   throw err || new Error("all Binance hosts failed");
 }
