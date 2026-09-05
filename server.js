@@ -1684,7 +1684,12 @@ app.get("/api/tracked", wrap(async (_req, res) => {
     if (P != null && (t.status === "ACTIVE" || t.status === "WAITING")) rr = round((t.direction === "LONG" ? P - t.entry_mid : t.entry_mid - P) / Math.abs(t.entry_mid - t.stop), 2);
     return { ...t, currentPrice: P ?? null, openR: rr };
   });
-  res.json({ open: withLive.filter((t) => t.status === "WAITING" || t.status === "ACTIVE"), recent: withLive.filter((t) => t.status !== "WAITING" && t.status !== "ACTIVE").slice(0, 60) });
+  // Order open trades by the LATEST activity (entered time if it entered, else
+  // logged time), so a trade that just entered shows at the top - matching when
+  // the Paper book opens it, instead of sinking to its older log time.
+  const openRows = withLive.filter((t) => t.status === "WAITING" || t.status === "ACTIVE")
+    .sort((a, b) => new Date(b.entered_at || b.created_at) - new Date(a.entered_at || a.created_at));
+  res.json({ open: openRows, recent: withLive.filter((t) => t.status !== "WAITING" && t.status !== "ACTIVE").slice(0, 60) });
 }));
 
 app.get("*", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
