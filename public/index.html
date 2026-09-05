@@ -86,7 +86,7 @@
     <!-- PAPER TRADING TAB -->
     <div id="tab-paper" class="hidden">
       <div class="mb-3 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
-        <b class="text-slate-300">Goal-driven spot paper trading.</b> It ranks every good ≥95% coin by <b class="text-slate-300">ROI-per-hour × accuracy</b> and buys the <b>fastest, highest-return</b> ones - then rotates freed cash into the next best. Sells at <b>TP1</b> (profit) or the <b>stop</b> (loss). Each holding shows the <b class="text-slate-300">estimated TP1 profit</b> and the <b class="text-slate-300">estimated TP1 time in SL</b>. Long-only spot, <b class="text-amber-300">fake money</b>, 24/7.
+        <b class="text-slate-300">Goal-driven spot paper trading.</b> It enters at the signal's <b class="text-slate-300">entry zone</b> (the ideal price, the same trigger as the Track Record - only when price is actually in the zone), ranks every good ≥95% coin by <b class="text-slate-300">ROI-per-hour × accuracy</b>, and rotates freed cash into the next best. Sells at <b>TP1</b> (profit) or the <b>stop</b> (loss), minus fees. Long-only spot, <b class="text-amber-300">fake money</b>, 24/7.
       </div>
       <div id="paper-goal" class="mb-3 hidden rounded-lg border border-edge px-3 py-2 text-sm"></div>
       <div id="paper-cards" class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4"></div>
@@ -117,7 +117,7 @@
     <!-- FUTURES PAPER TAB -->
     <div id="tab-futures" class="hidden">
       <div class="mb-3 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
-        <b class="text-slate-300">Leveraged futures paper trading.</b> Same method as spot - ranks good ≥95% coins by ROI/time/accuracy and rotates - but with <b class="text-amber-300">leverage</b> and <b>long + short</b>. Margin × leverage = notional; profit & loss are on the notional. Sells at TP or the stop; the loss is capped at the margin (liquidation). <b class="text-rose-400">High risk</b> - a small adverse move can wipe the margin. Fake money, 24/7.
+        <b class="text-slate-300">Leveraged futures paper trading.</b> Same method as spot - enters at the signal's <b>entry zone</b> (like the Track Record), ranks good ≥95% coins by ROI/time/accuracy and rotates - but with <b class="text-amber-300">leverage</b> and <b>long + short</b>. Margin × leverage = notional; P&L on the notional, minus fees, capped at the margin (liquidation). <b class="text-rose-400">High risk</b> - a small adverse move can wipe the margin. Fake money, 24/7.
       </div>
       <div id="fut-goal" class="mb-3 hidden rounded-lg border border-edge px-3 py-2 text-sm"></div>
       <div id="fut-cards" class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4"></div>

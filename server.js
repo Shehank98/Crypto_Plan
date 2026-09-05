@@ -1156,7 +1156,7 @@ function paperEligible(s) {
   if (s.direction !== "LONG" || !s.entry || !s.targets) return false;        // SPOT = buy only
   if (!settings.paperTfs.includes(s.tf)) return false;                       // only the chosen timeframes
   if (s.confidence < TRACK_MIN_CONFIDENCE) return false;                     // top accuracy only (>=95%)
-  if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return false; // still enterable
+  if (s.entry.window !== "OPEN") return false;                              // enter ONLY when price is in the zone (same trigger as the Track Record), not while WAITing
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
   if (!s.quality || s.quality.score < 3) return false;                       // good coins only (Blue-chip / Solid)
   const eta = s.targets[0].etaMin;
@@ -1228,7 +1228,7 @@ async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
   if (cost < 1) return;
   const { idx, t: tgt } = tpTarget(s, settings.paperTpLevel);
-  const entry = s.priceUsd, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
+  const entry = s.entry.mid, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;    // enter at the ideal zone price (like the Track Record)
   const qty = cost / entry, eta1 = tgt.etaMin ?? null;
   const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
   const proj = round(cost * g1 / 100, 2), loss = round(cost * riskPct / 100, 2);
@@ -1306,7 +1306,7 @@ function futuresEligible(s) {
   if (s.direction !== "LONG" && s.direction !== "SHORT") return false;
   if (!settings.futuresTfs.includes(s.tf)) return false;                     // only the chosen timeframes
   if (!s.entry || !s.targets || s.confidence < TRACK_MIN_CONFIDENCE) return false;
-  if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return false;
+  if (s.entry.window !== "OPEN") return false;                              // enter only when price is in the zone (same trigger as the Track Record)
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
   if (!s.quality || s.quality.score < 3) return false;
   // LIQUIDATION SAFETY: at high leverage the ATR stop is often WIDER than the
@@ -1346,7 +1346,7 @@ async function openFutures(s, margin) {
   const lev = Math.max(1, settings.futuresLeverage), notional = round(margin * lev, 2);
   const { idx, t: tgt } = tpTarget(s, settings.futuresTpLevel);
   const long = s.direction === "LONG";
-  const entry = s.priceUsd, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
+  const entry = s.entry.mid, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;    // enter at the ideal zone price (like the Track Record)
   const qty = notional / entry, eta1 = tgt.etaMin ?? null;
   const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
   const proj = round(notional * g1 / 100, 2);                        // profit at TP (on notional)

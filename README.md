@@ -180,10 +180,11 @@ setup outranks a slow +5%-in-10-hours one, so your capital compounds quickly tow
 How each trade works - exactly like a real spot account:
 
 1. A signal scores **≥95%** on a **good coin** (Blue-chip / Solid quality, liquid, market not
-   risk-off) and is **still enterable** (not already run past its zone).
-2. It **buys** `PAPER_POSITION_USD` of the **best-ranked** one at the **real live price** - the tab
-   shows the **$ size**, **coin quantity**, the **estimated TP1 profit**, and the **estimated TP1
-   time in Sri Lanka time**.
+   risk-off) and **price is in the entry zone** (window OPEN) - the same trigger the Track Record
+   uses, so the two agree.
+2. It **buys** `PAPER_POSITION_USD` of the **best-ranked** one at the **entry-zone price** (the ideal
+   planned entry, matching the Track Record - not a market fill at the top) - the tab shows the
+   **$ size**, **coin quantity**, the **estimated TP1 profit**, and the **estimated TP1 time in SL**.
 3. That cash is now **invested** (free cash drops). You can hold at most `PAPER_MAX_OPEN` coins.
 4. It **sells** at **TP1** (profit) or the **stop** (loss). The cash **plus profit** returns to
    free cash.
