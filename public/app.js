@@ -808,6 +808,47 @@ async function api2(p, body) {
   return b;
 }
 
+// ---------- Performance analytics ----------
+function equityCurveSvg(curve) {
+  if (!curve || curve.length < 2) return '<div class="text-xs text-slate-500">Equity curve appears after a few closed trades.</div>';
+  const W = 600, H = 120, pad = 6;
+  const min = Math.min(...curve), max = Math.max(...curve), span = max - min || 1;
+  const x = (i) => pad + (i / (curve.length - 1)) * (W - 2 * pad);
+  const y = (v) => H - pad - ((v - min) / span) * (H - 2 * pad);
+  const d = curve.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const up = curve[curve.length - 1] >= curve[0];
+  const start = curve[0], base = y(start);
+  return `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="max-width:100%"><line x1="${pad}" y1="${base.toFixed(1)}" x2="${W - pad}" y2="${base.toFixed(1)}" stroke="#334155" stroke-dasharray="3 3"/><path d="${d}" fill="none" stroke="${up ? "#10b981" : "#f43f5e"}" stroke-width="1.5"/></svg>`;
+}
+async function renderAnalytics(prefix, book) {
+  const el = $(prefix + "-perf"); if (!el) return;
+  let a; try { a = await api("/api/" + book + "/analytics"); } catch (e) { return; }
+  if (!a.trades) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
+  const chip = (l, v, cls) => `<div class="rounded-lg border border-edge bg-panel px-3 py-2"><div class="text-[11px] uppercase text-slate-500">${l}</div><div class="text-base font-semibold ${cls || "text-white"}">${v}</div></div>`;
+  const pf = a.profitFactor == null ? "∞" : a.profitFactor;
+  const brk = (title, m) => {
+    const keys = Object.keys(m); if (!keys.length) return "";
+    return `<div><div class="mb-1 text-[11px] uppercase text-slate-500">${title}</div><div class="space-y-0.5">${keys.map((k) => `<div class="flex justify-between gap-3 text-xs"><span class="text-slate-300">${k}</span><span class="text-slate-400">${m[k].trades}t · ${m[k].winRate}% · <span class="${g(m[k].net)}">${m[k].net >= 0 ? "+" : ""}$${m[k].net}</span></span></div>`).join("")}</div></div>`;
+  };
+  el.innerHTML = `<h3 class="mb-2 text-sm font-semibold text-slate-300">📈 Performance <span class="text-xs font-normal text-slate-500">(${a.trades} closed trades)</span></h3>
+    <div class="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      ${chip("Net PnL", (a.netUsd >= 0 ? "+" : "") + "$" + a.netUsd, g(a.netUsd))}
+      ${chip("Profit factor", pf, a.profitFactor == null || a.profitFactor >= 1 ? "text-emerald-400" : "text-rose-400")}
+      ${chip("Expectancy", (a.expectancyUsd >= 0 ? "+" : "") + "$" + a.expectancyUsd + "/trade", g(a.expectancyUsd))}
+      ${chip("Win rate", a.winRatePct + "%  " + a.wins + "-" + a.losses)}
+      ${chip("Max drawdown", "-$" + a.maxDrawdownUsd + " (" + a.maxDrawdownPct + "%)", "text-rose-400")}
+      ${chip("Avg hold", a.avgHoldMin + "m")}
+    </div>
+    <div class="mb-1 text-[11px] uppercase text-slate-500">Equity curve</div>
+    <div class="mb-3 w-full overflow-x-auto rounded-lg border border-edge bg-ink/40 p-2">${equityCurveSvg(a.curve)}</div>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      ${brk("By timeframe", a.byTf)}${brk("By quality", a.byQuality)}
+    </div>
+    <div class="mt-2 text-xs text-slate-500">Avg win <span class="text-emerald-400">+$${a.avgWinUsd}</span> · Avg loss <span class="text-rose-400">-$${a.avgLossUsd}</span>${a.best ? ` · Best ${a.best.symbol} +$${a.best.pnl}` : ""}${a.worst ? ` · Worst ${a.worst.symbol} $${a.worst.pnl}` : ""}</div>`;
+}
+
 // ---------- Paper trading ----------
 const TF_ALL = ["15m", "1h", "4h", "1d"];
 function renderTfChips(containerId, active) {
@@ -863,6 +904,7 @@ async function loadPaper() {
   $("paper-recent").innerHTML = p.recent.length
     ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th class="text-right">Buy</th><th class="text-right">Sell</th><th>Result</th><th class="text-right">Size $</th><th class="text-right">P/L $</th><th class="text-right">P/L %</th><th>Closed (SL)</th></tr></thead><tbody>${p.recent.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${usd(x.exit_price)}</td><td class="py-1.5 text-xs ${x.status === "WIN" ? "text-emerald-400" : "text-rose-400"}">${x.status} (${x.exit_reason})</td><td class="py-1.5 text-right tabular-nums text-slate-400">${x.cost_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_usd)}">${x.pnl_usd >= 0 ? "+" : ""}${x.pnl_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_pct)}">${x.pnl_pct >= 0 ? "+" : ""}${x.pnl_pct}%</td><td class="py-1.5 text-xs text-slate-500">${slTime(x.closed_at)}</td></tr>`).join("")}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
+  renderAnalytics("paper", "paper");
 }
 async function savePaper() {
   try {
@@ -919,6 +961,7 @@ async function loadFutures() {
   $("fut-recent").innerHTML = p.recent.length
     ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Side</th><th class="text-right">Entry</th><th class="text-right">Exit</th><th>Result</th><th class="text-right">Margin</th><th class="text-right">P/L $</th><th class="text-right">P/L %</th><th>Closed (SL)</th></tr></thead><tbody>${p.recent.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 ${x.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}">${x.direction}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${usd(x.exit_price)}</td><td class="py-1.5 text-xs ${x.status === "WIN" ? "text-emerald-400" : "text-rose-400"}">${x.status} (${x.exit_reason})</td><td class="py-1.5 text-right tabular-nums text-slate-400">${x.cost_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_usd)}">${x.pnl_usd >= 0 ? "+" : ""}${x.pnl_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_pct)}">${x.pnl_pct >= 0 ? "+" : ""}${x.pnl_pct}%</td><td class="py-1.5 text-xs text-slate-500">${slTime(x.closed_at)}</td></tr>`).join("")}</tbody>`
     : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
+  renderAnalytics("fut", "futures");
 }
 async function saveFutures() {
   try {

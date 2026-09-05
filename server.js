@@ -1074,6 +1074,37 @@ async function paperDaily() {
   const lossToRecover = round(Math.max(0, todays.filter((t) => t.status === "LOSS").reduce((a, t) => a - (Number(t.pnl_usd) || 0), 0)), 2);
   return { date: today, net: round(net, 2), wins, losses, trades: todays.length, target, remaining: round(Math.max(0, target - net), 2), reached: net >= target, lossToRecover };
 }
+// Full performance analytics for a book: the metrics a desk actually tracks.
+function bookAnalytics(rows, startCapital) {
+  const closed = rows.filter((t) => t.status === "WIN" || t.status === "LOSS").slice().reverse(); // chronological
+  const wins = closed.filter((t) => t.status === "WIN");
+  const losses = closed.filter((t) => t.status === "LOSS");
+  const grossWin = wins.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0);
+  const grossLoss = Math.abs(losses.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0));
+  const net = grossWin - grossLoss, trades = closed.length;
+  let eq = startCapital, peak = startCapital, maxDD = 0;
+  const curve = [round(eq, 2)];
+  for (const t of closed) { eq += Number(t.pnl_usd) || 0; peak = Math.max(peak, eq); maxDD = Math.max(maxDD, peak - eq); curve.push(round(eq, 2)); }
+  const holds = closed.filter((t) => t.opened_at && t.closed_at).map((t) => (new Date(t.closed_at) - new Date(t.opened_at)) / 60000);
+  const avgHold = holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : 0;
+  const by = (key) => { const m = {}; for (const t of closed) { const k = t[key] || "?"; (m[k] = m[k] || { trades: 0, wins: 0, net: 0 }); m[k].trades++; if (t.status === "WIN") m[k].wins++; m[k].net += Number(t.pnl_usd) || 0; } for (const k in m) { m[k].winRate = round((m[k].wins / m[k].trades) * 100, 0); m[k].net = round(m[k].net, 2); } return m; };
+  const best = closed.reduce((a, t) => (Number(t.pnl_usd) > (a ? Number(a.pnl_usd) : -1e9) ? t : a), null);
+  const worst = closed.reduce((a, t) => (Number(t.pnl_usd) < (a ? Number(a.pnl_usd) : 1e9) ? t : a), null);
+  return {
+    trades, wins: wins.length, losses: losses.length,
+    winRatePct: trades ? round((wins.length / trades) * 100, 1) : null,
+    netUsd: round(net, 2),
+    profitFactor: grossLoss > 0 ? round(grossWin / grossLoss, 2) : (grossWin > 0 ? null : 0), // null = no losses yet
+    expectancyUsd: trades ? round(net / trades, 3) : 0,
+    avgWinUsd: wins.length ? round(grossWin / wins.length, 2) : 0,
+    avgLossUsd: losses.length ? round(grossLoss / losses.length, 2) : 0,
+    maxDrawdownUsd: round(maxDD, 2), maxDrawdownPct: peak > 0 ? round((maxDD / peak) * 100, 1) : 0,
+    avgHoldMin: round(avgHold, 0), curve,
+    byTf: by("tf"), byQuality: by("quality"),
+    best: best ? { symbol: best.symbol, pnl: round(Number(best.pnl_usd), 2) } : null,
+    worst: worst ? { symbol: worst.symbol, pnl: round(Number(worst.pnl_usd), 2) } : null,
+  };
+}
 async function tgBroadcast(text) { if (!bot || chats.size === 0) return; for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {}); }
 // Format an absolute time (ms) as HH:MM Sri Lanka time.
 function slClock(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
@@ -1574,6 +1605,7 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
   res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, tfs: settings.paperTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
+app.get("/api/paper/analytics", wrap(async (_req, res) => res.json(bookAnalytics(await pstore.all(5000), settings.capitalUsd))));
 
 // Built-in paper FUTURES trading: leveraged margin account + open/closed positions.
 app.get("/api/futures/trades", wrap(async (_req, res) => {
@@ -1601,6 +1633,7 @@ app.get("/api/futures/trades", wrap(async (_req, res) => {
   res.json({ enabled: settings.futuresTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, equityUsd: equity, realizedUsd: a.realized, marginPerTrade: settings.futuresMarginUsd, leverage: settings.futuresLeverage, maxOpen: settings.futuresMaxOpen, tpLevel: settings.futuresTpLevel, tfs: settings.futuresTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.futuresMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/futures/reset", wrap(async (_req, res) => { await fstore.reset(); res.json({ ok: true }); }));
+app.get("/api/futures/analytics", wrap(async (_req, res) => res.json(bookAnalytics(await fstore.all(5000), settings.futuresCapitalUsd))));
 
 app.get("/api/regime", wrap(async (_req, res) => res.json(marketRegime)));
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
