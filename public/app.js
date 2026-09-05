@@ -721,6 +721,13 @@ async function loadSettings() {
     if ($("rk-sizing")) $("rk-sizing").checked = s.riskSizing !== false;
     const rk = { "rk-base": s.baseRiskPct, "rk-max": s.maxRiskPct, "rk-pos": s.maxPositionPct, "rk-dl": s.maxDailyLossPct, "rk-sd": s.maxSameDir, "rk-fs": s.feePctSpot, "rk-ff": s.feePctFutures, "rk-sl": s.slippagePct };
     for (const [id, v] of Object.entries(rk)) if ($(id) && v != null) $(id).value = v;
+    // Session & capital guards card
+    if ($("gd-session")) $("gd-session").checked = !!s.sessionFilter;
+    if ($("gd-weekend")) $("gd-weekend").checked = !!s.weekendGuard;
+    if ($("gd-derisk")) $("gd-derisk").checked = !!s.liqAutoDerisk;
+    const gd = { "gd-open": s.dailyOpenGuardMin, "gd-fund": s.fundingRatePct, "gd-kill": s.killSwitchPct, "gd-liq": s.liqBufferPct };
+    for (const [id, v] of Object.entries(gd)) if ($(id) && v != null) $(id).value = v;
+    if ($("gd-live") && s.session) $("gd-live").innerHTML = `· now: <b class="${s.entryAllowed ? "text-emerald-400" : "text-amber-400"}">${s.session}${s.entryAllowed ? " — entries open" : " — new entries paused"}</b>`;
     let note = "";
     if (s.lastError) note += `<span class="text-rose-400">⚠ ${s.lastError}</span><br>`;
     if (!s.durableSettings) note += '<span class="text-amber-400">Note: no database - keys reset on redeploy. Set DATABASE_URL to persist.</span>';
@@ -765,6 +772,13 @@ async function saveRiskModel() {
     await api2("/api/settings", { riskSizing: $("rk-sizing").checked, baseRiskPct: Number($("rk-base").value) || 1, maxRiskPct: Number($("rk-max").value) || 2, maxPositionPct: Number($("rk-pos").value) || 40, maxDailyLossPct: Number($("rk-dl").value), maxSameDir: Number($("rk-sd").value) || 3, feePctSpot: Number($("rk-fs").value), feePctFutures: Number($("rk-ff").value), slippagePct: Number($("rk-sl").value) });
     $("rk-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
   } catch (e) { $("rk-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function saveGuards() {
+  try {
+    await api2("/api/settings", { sessionFilter: $("gd-session").checked, weekendGuard: $("gd-weekend").checked, liqAutoDerisk: $("gd-derisk").checked, dailyOpenGuardMin: Number($("gd-open").value) || 0, fundingRatePct: Number($("gd-fund").value) || 0, killSwitchPct: Number($("gd-kill").value) || 0, liqBufferPct: Number($("gd-liq").value) || 0 });
+    $("gd-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
+    loadSettings();
+  } catch (e) { $("gd-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
 }
 async function testConnection() {
   $("set-status").textContent = "Testing…";
@@ -1087,6 +1101,7 @@ async function init() {
   $("set-test").onclick = testConnection;
   { const pt = $("proxy-test"); if (pt) pt.onclick = testProxies; }
   { const a = $("rk-save"); if (a) a.onclick = saveRiskModel; }
+  { const a = $("gd-save"); if (a) a.onclick = saveGuards; }
   $("set-clear").onclick = clearKeys;
   setInterval(() => { if (activeTab === "settings") loadTestnetTrades(); }, 15000); // refresh testnet PnL
   // Paper trading wiring

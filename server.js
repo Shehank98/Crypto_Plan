@@ -926,6 +926,14 @@ const settings = {
   maxPositionPct: Number(process.env.MAX_POSITION_PCT || 40), // one position can't exceed this % of equity
   maxDailyLossPct: Number(process.env.MAX_DAILY_LOSS_PCT || 15), // halt a book for the day past -this% of capital (0=off)
   maxSameDir: Number(process.env.MAX_SAME_DIR || 3),      // max concurrent positions in one direction (correlation cap)
+  // --- Session, timing & capital-protection guards (paper engine) ---
+  sessionFilter: /^(1|true|yes|on)$/i.test(process.env.SESSION_FILTER || ""),     // only open NEW trend trades in the London/NY overlap (13:30-23:30 SLST = 08:00-18:00 UTC)
+  weekendGuard: /^(1|true|yes|on)$/i.test(process.env.WEEKEND_GUARD || ""),       // no new entries on Sat/Sun (retail-driven, more fakeouts)
+  dailyOpenGuardMin: Number(process.env.DAILY_OPEN_GUARD_MIN || 0),               // skip new entries within N min of the daily open (00:00 UTC); 0=off
+  fundingRatePct: Number(process.env.FUNDING_RATE_PCT || 0.01),                   // assumed perp funding % per 8h window (futures holding cost)
+  killSwitchPct: Number(process.env.KILL_SWITCH_PCT || 0),                        // intraday equity drawdown % that flattens the book & locks it till next SL day (0=off)
+  liqBufferPct: Number(process.env.LIQ_BUFFER_PCT || 3),                          // warn when a futures position is within this % of liquidation (0=off)
+  liqAutoDerisk: /^(1|true|yes|on)$/i.test(process.env.LIQ_AUTO_DERISK || ""),    // also auto-close a position that breaches the liq buffer
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1185,6 +1193,8 @@ function fmtPaperSell(o) {
   const outcome = o.reason === "TP" || o.reason === "TP1" ? `✅ TP${o.tpLevel || 1} HIT | Win`
     : o.reason === "LIQ" ? "💥 LIQUIDATED | Loss"
     : o.reason === "TIME" ? `⌛ TIME EXIT | ${o.win ? "Win" : "Loss"}`
+    : o.reason === "DERISK" ? `🛟 DE-RISKED (near liq) | ${o.win ? "Win" : "Loss"}`
+    : o.reason === "KILL" ? `🛑 KILL SWITCH | ${o.win ? "Win" : "Loss"}`
     : "❌ STOP LOSS | Loss";
   return `${head}\n`
     + `${outcome}\n\n`
@@ -1222,6 +1232,8 @@ function paperScore(s) {
 // that free cash + open slots allow. This is the "highest ROI in limited time" core.
 async function fillPaper(signals) {
   if (!settings.paperTrading) return;
+  if (killSwitchLocked("spot")) return;                                      // book flattened & locked for the day
+  if (!entryGate().allow) return;                                            // session / weekend / daily-open guard
   if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;     // don't buy into a risk-off market
   if (dailyHalted((await paperDaily()).net, settings.capitalUsd)) return;    // daily loss circuit breaker
   const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
@@ -1281,6 +1293,96 @@ function sameDirCount(openRows, direction) { return openRows.filter((t) => t.dir
 const reentryBlock = new Map();                                              // "book|SYMBOL" -> unblock timestamp (ms)
 function blockReentry(book, symbol, tfMin) { reentryBlock.set(`${book}|${symbol}`, Date.now() + Math.max(30, tfMin || 60) * 60000); }
 function reentryBlocked(book, symbol) { const u = reentryBlock.get(`${book}|${symbol}`); if (!u) return false; if (Date.now() >= u) { reentryBlock.delete(`${book}|${symbol}`); return false; } return true; }
+
+// --- Session / timing guards ------------------------------------------------
+// SLST = UTC+5:30. High-liquidity overlap (London+NY) = 13:30-23:30 SLST = 08:00-18:00 UTC.
+// That window carries the cleanest trends; outside it (Asian session) trends are
+// thinner and fake out more, so trend-following holds fire on NEW entries.
+function sessionInfo(now = Date.now()) {
+  const d = new Date(now);
+  const utcH = d.getUTCHours() + d.getUTCMinutes() / 60;
+  const slDay = new Date(now + 5.5 * 3600 * 1000).getUTCDay();              // 0=Sun..6=Sat in SL time
+  const isWeekend = slDay === 0 || slDay === 6;
+  const activeOverlap = utcH >= 8 && utcH < 18;                            // London/NY overlap
+  const minsFromDailyOpen = Math.min(utcH * 60, (24 - utcH) * 60);         // distance to 00:00 UTC, in minutes
+  return { utcH, isWeekend, activeOverlap, session: activeOverlap ? "London/NY" : "Asian", minsFromDailyOpen };
+}
+// Should a NEW paper/futures entry be allowed to open right now? (Existing
+// positions are always managed - these guards only gate fresh entries.)
+function entryGate(now = Date.now()) {
+  const s = sessionInfo(now);
+  if (settings.sessionFilter && !s.activeOverlap) return { allow: false, reason: `off-session (${s.session}) - waiting for the London/NY overlap` };
+  if (settings.weekendGuard && s.isWeekend) return { allow: false, reason: "weekend guard - retail-driven, skipping new entries" };
+  if (settings.dailyOpenGuardMin > 0 && s.minsFromDailyOpen < settings.dailyOpenGuardMin) return { allow: false, reason: "daily-open volatility guard (around 00:00 UTC)" };
+  return { allow: true, reason: null };
+}
+// Perp funding: longs pay (shorts receive) roughly every 8h. Estimate the holding
+// cost as notional x rate x (funding windows crossed while the position was held).
+function fundingWindowsCrossed(openMs, closeMs) {
+  const W = 8 * 3600 * 1000; return Math.max(0, Math.floor(closeMs / W) - Math.floor(openMs / W));
+}
+function fundingCost(notional, direction, openMs, closeMs) {
+  const n = fundingWindowsCrossed(openMs, closeMs);
+  if (!n || !settings.fundingRatePct) return 0;
+  const cost = Math.abs(notional) * (settings.fundingRatePct / 100) * n;    // assume positive funding
+  return direction === "LONG" ? cost : -cost;                              // longs pay, shorts receive
+}
+
+// --- Intraday equity kill switch (per book) --------------------------------
+// Tracks the day's equity high-water mark; if equity draws down past killSwitchPct
+// from that peak, the book is FLATTENED and locked until the next SL day.
+const bookGuard = { spot: { day: null, peak: 0, locked: false }, futures: { day: null, peak: 0, locked: false } };
+const liqAlerted = new Set();                                                // futures trade ids already warned about the liq buffer
+function killSwitchState(book, equity, floor = 0, now = Date.now()) {
+  const g = bookGuard[book], day = slDateStr(now);
+  // The high-water mark can never sit below the realized (cash-basis) equity `floor`,
+  // so an open position that goes underwater before we saw a clean peak still measures
+  // the drawdown from the real starting equity, not from the already-down number.
+  if (g.day !== day) { g.day = day; g.peak = Math.max(equity, floor); g.locked = false; } // new SL day resets the guard
+  if (equity > g.peak) g.peak = equity;
+  if (floor > g.peak) g.peak = floor;
+  const ddPct = g.peak > 0 ? (g.peak - equity) / g.peak * 100 : 0;
+  if (settings.killSwitchPct > 0 && !g.locked && ddPct >= settings.killSwitchPct) g.triggered = true; else g.triggered = false;
+  return { ddPct: round(ddPct, 2), locked: g.locked, triggered: !!g.triggered, peak: round(g.peak, 2) };
+}
+function killSwitchLocked(book) { const g = bookGuard[book]; return g.day === slDateStr(Date.now()) && g.locked; }
+// Sum the net unrealized P/L of the open positions at the live prices.
+function openUnrealized(open, prices, kind) {
+  let u = 0;
+  for (const t of open) {
+    const P = prices.get(t.symbol); if (P == null) continue;
+    const long = t.direction !== "SHORT";
+    const notional = Number(t.notional_usd) || Number(t.cost_usd) || 0;
+    const movePct = (long ? (P - t.entry_price) : (t.entry_price - P)) / t.entry_price * 100;
+    let pnl = netAfterCosts(notional * movePct / 100, notional, kind);
+    if (kind === "futures" && pnl < -t.cost_usd) pnl = -t.cost_usd;
+    u += pnl;
+  }
+  return u;
+}
+// If the intraday equity drawdown breaches killSwitchPct, flatten every open
+// position at the live price (reason "KILL") and lock the book until the next day.
+async function runKillSwitch(book, open, prices, store, kind, startCap, realized) {
+  if (settings.killSwitchPct <= 0) return false;
+  const equity = startCap + realized + openUnrealized(open, prices, kind);
+  const st = killSwitchState(book, equity, startCap + realized);            // floor = realized cash-basis equity
+  if (!st.triggered) return false;
+  for (const t of open) {
+    const P = prices.get(t.symbol); if (P == null) continue;
+    const long = t.direction !== "SHORT";
+    const exit = rp(P);
+    const notional = Number(t.notional_usd) || Number(t.cost_usd) || 0;
+    const movePct = (long ? (exit - t.entry_price) : (t.entry_price - exit)) / t.entry_price * 100;
+    let pnl = netAfterCosts(notional * movePct / 100, notional, kind);
+    if (kind === "futures" && pnl < -t.cost_usd) pnl = -t.cost_usd;
+    await store.close(t.id, { status: pnl >= 0 ? "WIN" : "LOSS", exit_price: exit, exit_reason: "KILL", pnl_usd: round(pnl, 2), pnl_pct: round((pnl / Math.max(0.01, t.cost_usd)) * 100, 2), closed_at: new Date() });
+    blockReentry(book, t.symbol, 24 * 60);                                  // no re-entry the rest of the day
+  }
+  bookGuard[book].locked = true;
+  await tgBroadcast(`🛑 *KILL SWITCH - ${book === "futures" ? "Futures" : "Spot"}*\nIntraday equity drawdown hit ${st.ddPct}% (limit ${settings.killSwitchPct}%). Flattened ${open.length} position(s) and locked the book until tomorrow (SL).\n\n${TG_FOOTER}`);
+  console.log(`[${book}] KILL SWITCH at -${st.ddPct}% DD - flattened ${open.length}, locked till next day`);
+  return true;
+}
 // Buy one qualifying signal for `cost` dollars. (Ranking/eligibility done by fillPaper.)
 async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
@@ -1309,6 +1411,11 @@ async function openPaper(s, cost) {
 // amount invested. Freed cash is redeployed by the next scan (rotation).
 async function managePaper(prices) {
   let open; try { open = await pstore.openTrades(); } catch (e) { return; }
+  // Kill switch: flatten + lock the book if intraday equity drew down too far.
+  if (settings.killSwitchPct > 0 && open.length) {
+    const a0 = await paperAccount();
+    if (await runKillSwitch("spot", open, prices, pstore, "spot", settings.capitalUsd, a0.realized)) return;
+  }
   const now = Date.now();
   for (const t of open) {
     const P = prices.get(t.symbol);
@@ -1396,6 +1503,8 @@ function futuresEligible(s) {
 }
 async function fillFutures(signals) {
   if (!settings.futuresTrading) return;
+  if (killSwitchLocked("futures")) return;                                   // book flattened & locked for the day
+  if (!entryGate().allow) return;                                            // session / weekend / daily-open guard
   if (dailyHalted((await futuresDaily()).net, settings.futuresCapitalUsd)) return; // daily loss circuit breaker
   const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
   const ranked = signals.filter(futuresEligible).sort((a, b) => paperScore(b) - paperScore(a));
@@ -1449,6 +1558,11 @@ async function openFutures(s, margin) {
 }
 async function manageFutures(prices) {
   let open; try { open = await fstore.openTrades(); } catch (e) { return; }
+  // Kill switch: flatten + lock the book if intraday equity drew down too far.
+  if (settings.killSwitchPct > 0 && open.length) {
+    const a0 = await futuresAccount();
+    if (await runKillSwitch("futures", open, prices, fstore, "futures", settings.futuresCapitalUsd, a0.realized)) return;
+  }
   const now = Date.now();
   for (const t of open) {
     const P = prices.get(t.symbol);
@@ -1460,21 +1574,32 @@ async function manageFutures(prices) {
     // before the stop, since a leveraged stop can sit beyond liquidation).
     const liq = long ? t.entry_price * (1 - 1 / Math.max(1, t.leverage)) : t.entry_price * (1 + 1 / Math.max(1, t.leverage));
     const liquidated = long ? P <= liq : P >= liq;
+    // Liquidation buffer: warn (and optionally de-risk) when the mark is within
+    // liqBufferPct of the liq level but hasn't hit an exit yet.
+    const distLiqPct = Math.abs(P - liq) / P * 100;
+    const nearLiq = settings.liqBufferPct > 0 && !hitTp && !liquidated && distLiqPct <= settings.liqBufferPct;
+    const derisk = nearLiq && settings.liqAutoDerisk;
+    if (nearLiq && !derisk && !liqAlerted.has(t.id)) {
+      liqAlerted.add(t.id);
+      await tgBroadcast(`⚠️ *Liq buffer - ${t.symbol} ${t.direction} ${t.leverage}x*\nMark ${fmtUsd(rp(P))} is ~${round(distLiqPct, 2)}% from liquidation (${fmtUsd(rp(liq))}). Watch this one.\n\n${TG_FOOTER}`);
+    }
     // Time stop: free the margin after MAX_HOLD candles so it can rotate.
     const tfMin = TF_MINUTES[t.tf] || 60;
     const heldMin = t.opened_at ? (now - new Date(t.opened_at).getTime()) / 60000 : 0;
     const timeUp = heldMin > MAX_HOLD_CANDLES * tfMin;
-    if (!hitTp && !hitStop && !liquidated && !timeUp) continue;
+    if (!hitTp && !hitStop && !liquidated && !timeUp && !derisk) continue;
     // Fills: TP at the limit; a stop that gapped through fills at the live price
-    // (worse), never better; liquidation = margin gone; time exit at the live price.
+    // (worse), never better; liquidation = margin gone; time / de-risk exit at live.
     const exit = hitTp ? t.tp1 : liquidated ? rp(liq) : hitStop ? (long ? Math.min(t.stop, P) : Math.max(t.stop, P)) : rp(P);
-    const reason = hitTp ? "TP" : liquidated ? "LIQ" : hitStop ? "STOP" : "TIME";
+    const reason = hitTp ? "TP" : liquidated ? "LIQ" : hitStop ? "STOP" : derisk ? "DERISK" : "TIME";
     const movePct = (long ? (exit - t.entry_price) : (t.entry_price - exit)) / t.entry_price * 100;
     let pnl = netAfterCosts((Number(t.notional_usd) || 0) * movePct / 100, Number(t.notional_usd) || 0, "futures"); // net of fees
+    pnl -= fundingCost(Number(t.notional_usd) || 0, t.direction, new Date(t.opened_at).getTime(), now); // perp funding paid while held
     if (pnl < -t.cost_usd) pnl = -t.cost_usd;                        // can't lose more than the margin
     const pnlPct = round((pnl / Math.max(0.01, t.cost_usd)) * 100, 2); // net return on margin
     const status = pnl >= 0 ? "WIN" : "LOSS";
     if (pnl < 0) blockReentry("futures", t.symbol, tfMin);          // cooldown after a losing leg
+    liqAlerted.delete(t.id);
     await fstore.close(t.id, { status, exit_price: rp(exit), exit_reason: reason, pnl_usd: round(pnl, 2), pnl_pct: pnlPct, closed_at: new Date() });
     const acct = await futuresAccount();
     console.log(`[futures] CLOSE ${t.direction} ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash}`);
@@ -1581,7 +1706,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1615,6 +1740,10 @@ app.post("/api/settings", wrap(async (req, res) => {
   numSet("baseRiskPct", 0.1, 10); numSet("maxRiskPct", 0.1, 20); numSet("maxPositionPct", 1, 100);
   numSet("maxDailyLossPct", 0, 100); numSet("maxSameDir", 1, 20);
   numSet("feePctSpot", 0, 5); numSet("feePctFutures", 0, 5); numSet("slippagePct", 0, 5);
+  if (typeof b.sessionFilter === "boolean") settings.sessionFilter = b.sessionFilter;
+  if (typeof b.weekendGuard === "boolean") settings.weekendGuard = b.weekendGuard;
+  if (typeof b.liqAutoDerisk === "boolean") settings.liqAutoDerisk = b.liqAutoDerisk;
+  numSet("dailyOpenGuardMin", 0, 120); numSet("fundingRatePct", 0, 1); numSet("killSwitchPct", 0, 100); numSet("liqBufferPct", 0, 50);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
   if (b.futuresCapitalUsd != null && Number.isFinite(+b.futuresCapitalUsd)) settings.futuresCapitalUsd = Math.max(1, +b.futuresCapitalUsd);
   if (b.futuresMarginUsd != null && Number.isFinite(+b.futuresMarginUsd)) settings.futuresMarginUsd = Math.max(1, +b.futuresMarginUsd);
@@ -2038,4 +2167,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized };
