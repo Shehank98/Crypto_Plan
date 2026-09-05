@@ -209,7 +209,32 @@ setups expected to hit TP1 within N minutes (0 = no cap).
 It's **fake money** — for learning and proving the strategy before you risk anything real, and
 the recommended way to see the signals auto-trade when Binance isn't available in your region.
 
+**Reward:risk (Exit target):** TP1 sits exactly **1R** above entry and the stop **1R** below, so
+exiting at TP1 is **1:1** (a win equals a loss in $, on spot) — mathematically correct, and the
+highest hit-rate exit. To make wins bigger than losses, set **Exit at** to **TP2 (2:1)** or **TP3
+(3:1)** (`PAPER_TP_LEVEL`) — bigger reward per win, but the further target is hit less often.
+
 Endpoints: `GET /api/paper/trades`, `POST /api/paper/reset` (settings via `POST /api/settings`).
+
+## Futures paper trading (leveraged, long + short)
+
+The **⚡ Futures Paper** tab is the **same engine** as spot — ROI/time/accuracy ranking, rotation,
+daily goal, loss recovery, TP-level R:R, estimated TP time in SL — but **leveraged** and it can go
+**short** as well as long:
+
+- **Sizing:** `FUTURES_MARGIN_USD` per trade × `FUTURES_LEVERAGE` (default 20x) = the **notional**.
+  P/L is on the notional, so a +2% move at 20x on $10 margin = **+$4** (a −2% move = −$4). The loss
+  is **capped at the margin** — a big adverse move **liquidates** (~`100/leverage`% away), shown on
+  every position and in the buy message.
+- **Long + short:** it takes the best setup in either direction (with the market regime), so it can
+  profit in down markets too.
+- Same daily-goal, rotation and recovery behaviour as spot. Separate `futures_trades` table and
+  starting balance (`FUTURES_CAPITAL_USD`).
+
+> Leverage cuts both ways — it's the fastest path to the daily goal **and** to a wiped margin. Use
+> the paper tab to learn how 20x really behaves before risking anything real.
+
+Endpoints: `GET /api/futures/trades`, `POST /api/futures/reset` (settings via `POST /api/settings`).
 
 ## Ask-before-you-trade on Telegram
 

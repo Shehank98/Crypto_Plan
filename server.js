@@ -618,17 +618,21 @@ async function initStore() {
       status VARCHAR(10) DEFAULT 'OPEN', exit_price DOUBLE PRECISION, exit_reason VARCHAR(10),
       pnl_usd DOUBLE PRECISION, pnl_pct DOUBLE PRECISION,
       opened_at TIMESTAMPTZ DEFAULT NOW(), closed_at TIMESTAMPTZ )`);
-    // Built-in PAPER trading (simulated SPOT broker; no exchange, no keys, no proxy).
-    await pool.query(`CREATE TABLE IF NOT EXISTS paper_trades (
+    // Built-in PAPER trading (simulated broker; no exchange, no keys, no proxy).
+    // Same schema for the SPOT book (paper_trades) and the FUTURES book (futures_trades).
+    const paperCols = `
       id SERIAL PRIMARY KEY, symbol VARCHAR(20), tf VARCHAR(5), direction VARCHAR(5), confidence INT,
       entry_price DOUBLE PRECISION, tp1 DOUBLE PRECISION, stop DOUBLE PRECISION,
       cost_usd DOUBLE PRECISION, qty DOUBLE PRECISION, quality VARCHAR(12),
       eta1_min DOUBLE PRECISION, roi_score DOUBLE PRECISION,
+      leverage DOUBLE PRECISION, notional_usd DOUBLE PRECISION, tp_level INT,
       status VARCHAR(10) DEFAULT 'OPEN', exit_price DOUBLE PRECISION, exit_reason VARCHAR(12),
       pnl_usd DOUBLE PRECISION, pnl_pct DOUBLE PRECISION,
-      opened_at TIMESTAMPTZ DEFAULT NOW(), closed_at TIMESTAMPTZ )`);
-    // Migrate an earlier paper_trades table to the current shape if needed.
-    for (const col of ["cost_usd DOUBLE PRECISION", "qty DOUBLE PRECISION", "quality VARCHAR(12)", "eta1_min DOUBLE PRECISION", "roi_score DOUBLE PRECISION"])
+      opened_at TIMESTAMPTZ DEFAULT NOW(), closed_at TIMESTAMPTZ`;
+    await pool.query(`CREATE TABLE IF NOT EXISTS paper_trades (${paperCols})`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS futures_trades (${paperCols})`);
+    // Migrate earlier paper_trades tables to the current shape if needed.
+    for (const col of ["cost_usd DOUBLE PRECISION", "qty DOUBLE PRECISION", "quality VARCHAR(12)", "eta1_min DOUBLE PRECISION", "roi_score DOUBLE PRECISION", "leverage DOUBLE PRECISION", "notional_usd DOUBLE PRECISION", "tp_level INT"])
       await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
     await pool.query(`CREATE TABLE IF NOT EXISTS app_settings ( k VARCHAR(40) PRIMARY KEY, v TEXT )`);
     await forex.initSchema().catch((e) => console.warn("[forex] schema:", e.message));
@@ -767,8 +771,9 @@ async function openFrom(data) {
       else await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
     }
   }
-  // Paper: rank ALL signals by ROI/time/accuracy and buy the best that fit (rotation).
+  // Paper books: rank ALL signals by ROI/time/accuracy and open the best that fit.
   await fillPaper(data.signals).catch((e) => console.warn("[paper]", e.message));
+  await fillFutures(data.signals).catch((e) => console.warn("[futures]", e.message));
 }
 
 async function computeStats() {
@@ -847,6 +852,16 @@ const settings = {
   paperPositionUsd: Number(process.env.PAPER_POSITION_USD || 20), // $ spent per SPOT trade (buy this much of the coin)
   paperGoalUsd: Number(process.env.PAPER_GOAL_USD || 10),        // profit target for the session (context / progress bar)
   paperMaxEtaMin: Number(process.env.PAPER_MAX_ETA_MIN || 0),    // 0 = no cap; else skip setups whose TP1 ETA is longer than this
+  paperTpLevel: Number(process.env.PAPER_TP_LEVEL || 1),         // exit at TP1(1R,1:1) / TP2(2R,2:1) / TP3(3R,3:1)
+  // FUTURES paper book (leveraged, long + short)
+  futuresTrading: !/^(0|false|no|off)$/i.test(process.env.FUTURES_TRADING || "true"),
+  futuresCapitalUsd: Number(process.env.FUTURES_CAPITAL_USD || 200), // starting margin balance
+  futuresMarginUsd: Number(process.env.FUTURES_MARGIN_USD || 10),    // margin per trade
+  futuresLeverage: Number(process.env.FUTURES_LEVERAGE || 20),       // leverage (amplifies profit AND loss)
+  futuresMaxOpen: Number(process.env.FUTURES_MAX_OPEN || 5),
+  futuresGoalUsd: Number(process.env.FUTURES_GOAL_USD || 10),
+  futuresMaxEtaMin: Number(process.env.FUTURES_MAX_ETA_MIN || 0),
+  futuresTpLevel: Number(process.env.FUTURES_TP_LEVEL || 1),
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1039,21 +1054,29 @@ async function paperDaily() {
 async function tgBroadcast(text) { if (!bot || chats.size === 0) return; for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {}); }
 // Format an absolute time (ms) as HH:MM Sri Lanka time.
 function slClock(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
-// Structured PAPER BUY / SELL cards (same house style as the signal card).
+// Structured BUY / SELL cards (same house style) for both the SPOT and FUTURES books.
 function fmtPaperBuy(o) {
-  return `🟢 *PAPER BUY — ${o.symbol}*\n`
-    + `💎 ${o.quality} Setup | ${o.alloc}% Allocation\n\n`
-    + `💵 Capital: *$${o.cost}*\n`
+  const isF = o.kind === "futures";
+  const dot = o.direction === "SHORT" ? "🔴" : "🟢";
+  const head = isF ? `${dot} *FUTURES ${o.direction} — ${o.symbol}*  ${o.leverage}x` : `🟢 *PAPER BUY — ${o.symbol}*`;
+  const sub = isF ? `💎 ${o.quality} | ${o.alloc}% margin used | R:R ${o.rr}:1 | ${o.confidence}%`
+                  : `💎 ${o.quality} Setup | ${o.alloc}% Allocation | R:R ${o.rr}:1`;
+  const capLine = isF ? `💵 Margin: *$${o.cost}* → Notional *$${o.notional}* (${o.leverage}x)` : `💵 Capital: *$${o.cost}*`;
+  return `${head}\n${sub}\n\n`
+    + `${capLine}\n`
     + `🪙 Entry: ${o.qty} ${o.symbol} @ ${fmtUsd(o.entry)}\n\n`
-    + `🎯 *TAKE PROFIT:* ${fmtUsd(o.tp1)}\n`
+    + `🎯 *TAKE PROFIT (TP${o.tpLevel}):* ${fmtUsd(o.tp1)}\n`
     + `📈 Target: +${o.gainPct}% → *+$${o.proj}*\n\n`
     + `🛑 *STOP LOSS:* ${fmtUsd(o.stop)}\n`
-    + `📉 Risk: -${o.riskPct}% → *-$${o.loss}*\n\n`
+    + `📉 Risk: -${o.riskPct}% → *-$${o.loss}*\n`
+    + (isF ? `💥 Liquidation ≈ ${fmtUsd(o.liq)} (~${o.liqPct}% adverse move)\n` : "")
+    + `\n`
     + (o.etaSL ? `⏱ Est. TP1: *${o.etaSL}* (~${o.etaLabel})\n\n` : "")
-    + `⚙️ *AUTO-MANAGED*\nPosition closes automatically at TP1 or Stop Loss, then the strategy rotates into the next selected setup.\n\n`
-    + `${TG_FOOTER}\n\n${DISC_PAPER}`;
+    + `⚙️ *AUTO-MANAGED*\nCloses at TP${o.tpLevel} or Stop Loss, then rotates into the next best setup.\n\n`
+    + `${TG_FOOTER}\n\n${isF ? DISC_FUTURES : DISC_PAPER}`;
 }
 function fmtPaperSell(o) {
+  const isF = o.kind === "futures";
   const sd = (n) => (n >= 0 ? "+$" : "-$") + Math.abs(n);   // signed dollars: -$0.65, +$0.65
   const d = o.day;
   let dayLine = "";
@@ -1062,15 +1085,16 @@ function fmtPaperSell(o) {
     else if (d.net < 0) dayLine = `🔻 *Recovering:* today ${sd(d.net)} — need *+$${round(d.remaining, 2)}* more to hit the $${d.target} goal. Hunting a good setup to cover it.\n`;
     else dayLine = `📅 *Today:* ${sd(d.net)} / $${d.target} goal — *+$${round(d.remaining, 2)}* to go.${o.win ? "" : d.lossToRecover > 0 ? ` (covering -$${d.lossToRecover})` : ""}\n`;
   }
-  return `${o.win ? "🎯" : "🛑"} *PAPER SELL — ${o.symbol}*\n`
-    + `${o.win ? "✅ TP1 HIT | Win" : "❌ STOP LOSS | Loss"}\n\n`
-    + `💵 Bought: $${o.cost} @ ${fmtUsd(o.entry)}\n`
-    + `${o.win ? "💰" : "💸"} Sold: ${fmtUsd(o.exit)}  (${o.movePct >= 0 ? "+" : ""}${o.movePct}%)\n`
-    + `${o.win ? "📈 Profit" : "📉 Loss"}: *${sd(o.pnl)}*\n\n`
+  const head = isF ? `${o.win ? "🎯" : "🛑"} *FUTURES ${o.direction} ${o.symbol} — CLOSED*` : `${o.win ? "🎯" : "🛑"} *PAPER SELL — ${o.symbol}*`;
+  return `${head}\n`
+    + `${o.win ? `✅ TP${o.tpLevel || 1} HIT | Win` : "❌ STOP LOSS | Loss"}\n\n`
+    + `💵 ${isF ? "Margin" : "Bought"}: $${o.cost}${isF ? ` (${o.leverage}x)` : ""} @ ${fmtUsd(o.entry)}\n`
+    + `${o.win ? "💰" : "💸"} ${isF ? "Exit" : "Sold"}: ${fmtUsd(o.exit)}  (${o.movePct >= 0 ? "+" : ""}${o.movePct}%)\n`
+    + `${o.win ? "📈 Profit" : "📉 Loss"}: *${sd(o.pnl)}*${isF && o.pnlPct != null ? ` (${o.pnlPct >= 0 ? "+" : ""}${o.pnlPct}% on margin)` : ""}\n\n`
     + dayLine
     + `🏦 Balance: *$${o.balance}*  ·  Realized: ${sd(o.realized)}\n`
     + `🔄 Rotating into the next best setup.\n\n`
-    + `${TG_FOOTER}\n\n${DISC_PAPER}`;
+    + `${TG_FOOTER}\n\n${isF ? DISC_FUTURES : DISC_PAPER}`;
 }
 
 // Does a signal qualify for the paper spot account? (good coin, high accuracy, tradeable now)
@@ -1107,22 +1131,25 @@ async function fillPaper(signals) {
     await openPaper(s, Math.min(settings.paperPositionUsd, acct.cash)).catch((e) => console.warn("[paper]", e.message));
   }
 }
+// Which target to exit at (TP1=1R/1:1, TP2=2R/2:1, TP3=3R/3:1). Higher R:R but
+// lower hit-rate the further out you go.
+function tpTarget(s, level) { const i = Math.min(Math.max(1, level || 1), s.targets.length) - 1; return { idx: i, t: s.targets[i] }; }
 // Buy one qualifying signal for `cost` dollars. (Ranking/eligibility done by fillPaper.)
 async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
   if (cost < 1) return;
-  const entry = s.priceUsd, tp1 = s.targets[0].priceUsd, stop = s.stop.priceUsd;
-  const qty = cost / entry, eta1 = s.targets[0].etaMin ?? null;
-  const id = await pstore.insert({ symbol: s.symbol, tf: s.tf, direction: "LONG", confidence: s.confidence, entry_price: entry, tp1, stop, cost_usd: round(cost, 2), qty: Number(qty.toPrecision(8)), quality: s.quality.tier, eta1_min: eta1, roi_score: round(paperScore(s), 3) });
-  const etaTxt = eta1 != null ? ` · est TP1 by ${slClock(Date.now() + eta1 * 60000)} (~${s.targets[0].etaLabel})` : "";
-  console.log(`[paper] BUY ${s.symbol} $${round(cost, 2)} (${qty.toPrecision(6)} @ ${entry}) TP1 ${tp1} stop ${stop}${etaTxt}`);
-  const g1 = s.targets[0].gainPct, proj = round(cost * g1 / 100, 2);
-  const riskPct = s.stop.riskPct, loss = round(cost * riskPct / 100, 2);
+  const { idx, t: tgt } = tpTarget(s, settings.paperTpLevel);
+  const entry = s.priceUsd, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
+  const qty = cost / entry, eta1 = tgt.etaMin ?? null;
+  const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
+  const proj = round(cost * g1 / 100, 2), loss = round(cost * riskPct / 100, 2);
   const alloc = round((cost / Math.max(1, settings.capitalUsd)) * 100, 0);
+  const id = await pstore.insert({ symbol: s.symbol, tf: s.tf, direction: "LONG", confidence: s.confidence, entry_price: entry, tp1, stop, cost_usd: round(cost, 2), qty: Number(qty.toPrecision(8)), quality: s.quality.tier, eta1_min: eta1, roi_score: round(paperScore(s), 3), leverage: 1, notional_usd: round(cost, 2), tp_level: idx + 1 });
+  console.log(`[paper] BUY ${s.symbol} $${round(cost, 2)} @ ${entry} TP${idx + 1} ${tp1} stop ${stop} (R:R ${rr})`);
   await tgBroadcast(fmtPaperBuy({
-    symbol: s.symbol, quality: s.quality.tier, alloc, cost: round(cost, 2), qty: Number(qty.toPrecision(5)),
-    entry, tp1, gainPct: g1, proj, stop, riskPct, loss,
-    etaSL: eta1 != null ? slClock(Date.now() + eta1 * 60000) : null, etaLabel: s.targets[0].etaLabel,
+    kind: "spot", symbol: s.symbol, quality: s.quality.tier, confidence: s.confidence, alloc, rr, cost: round(cost, 2), qty: Number(qty.toPrecision(5)),
+    entry, tp1, tpLevel: idx + 1, gainPct: g1, proj, stop, riskPct, loss,
+    etaSL: eta1 != null ? slClock(Date.now() + eta1 * 60000) : null, etaLabel: tgt.etaLabel,
   }));
   return id;
 }
@@ -1144,8 +1171,115 @@ async function managePaper(prices) {
     console.log(`[paper] SELL ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash} (equity building)`);
     const day = await paperDaily();
     await tgBroadcast(fmtPaperSell({
-      symbol: t.symbol, win: hitTp, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2),
+      kind: "spot", symbol: t.symbol, win: hitTp, tpLevel: t.tp_level || 1, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2),
       pnl: round(pnl, 2), balance: round(settings.capitalUsd + acct.realized, 2), realized: acct.realized, day,
+    }));
+  }
+}
+
+// ===========================================================================
+// Built-in PAPER FUTURES trading - same method as spot, but LEVERAGED and
+// long+short. Margin per trade x leverage = notional; PnL is on the notional,
+// capped at the margin (liquidation). Rotates into the next best coin. 24/7.
+// ===========================================================================
+const fMem = []; let fId = 1;
+const fstore = {
+  async openTrades() { if (useDb) return (await pool.query("SELECT * FROM futures_trades WHERE status='OPEN' ORDER BY opened_at DESC")).rows; return fMem.filter((t) => t.status === "OPEN"); },
+  async all(limit = 200) { if (useDb) return (await pool.query("SELECT * FROM futures_trades ORDER BY opened_at DESC LIMIT $1", [limit])).rows; return fMem.slice().reverse().slice(0, limit); },
+  async hasOpen(symbol) { if (useDb) { const { rows } = await pool.query("SELECT 1 FROM futures_trades WHERE symbol=$1 AND status='OPEN' LIMIT 1", [symbol]); return rows.length > 0; } return fMem.some((t) => t.symbol === symbol && t.status === "OPEN"); },
+  async countOpen() { if (useDb) return +(await pool.query("SELECT COUNT(*) c FROM futures_trades WHERE status='OPEN'")).rows[0].c; return fMem.filter((t) => t.status === "OPEN").length; },
+  async openCost() { if (useDb) return +((await pool.query("SELECT COALESCE(SUM(cost_usd),0) s FROM futures_trades WHERE status='OPEN'")).rows[0].s) || 0; return fMem.filter((t) => t.status === "OPEN").reduce((a, t) => a + (Number(t.cost_usd) || 0), 0); },
+  async insert(t) { if (useDb) { const { rows } = await pool.query("INSERT INTO futures_trades (symbol,tf,direction,confidence,entry_price,tp1,stop,cost_usd,qty,quality,eta1_min,roi_score,leverage,notional_usd,tp_level) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id", [t.symbol, t.tf, t.direction, t.confidence, t.entry_price, t.tp1, t.stop, t.cost_usd, t.qty, t.quality, t.eta1_min, t.roi_score, t.leverage, t.notional_usd, t.tp_level]); return rows[0].id; } const id = fId++; fMem.push({ id, status: "OPEN", opened_at: new Date().toISOString(), ...t }); return id; },
+  async close(id, f) { if (useDb) { const keys = Object.keys(f); const set = keys.map((k, i) => `${k}=$${i + 2}`).join(","); await pool.query(`UPDATE futures_trades SET ${set} WHERE id=$1`, [id, ...keys.map((k) => f[k])]); } else { const m = fMem.find((x) => x.id === id); if (m) Object.assign(m, f); } },
+  async reset() { if (useDb) await pool.query("DELETE FROM futures_trades"); else { fMem.length = 0; fId = 1; } },
+};
+async function futuresAccount() {
+  const rows = await fstore.all(5000);
+  const closed = rows.filter((t) => t.status === "WIN" || t.status === "LOSS");
+  const realized = closed.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0);
+  const invested = await fstore.openCost();
+  const wins = closed.filter((t) => t.status === "WIN").length, losses = closed.filter((t) => t.status === "LOSS").length;
+  return { start: settings.futuresCapitalUsd, realized: round(realized, 2), invested: round(invested, 2), cash: round(settings.futuresCapitalUsd + realized - invested, 2), wins, losses, closed: closed.length };
+}
+async function futuresDaily() {
+  const rows = await fstore.all(5000);
+  const today = slDateStr(Date.now());
+  const todays = rows.filter((t) => (t.status === "WIN" || t.status === "LOSS") && t.closed_at && slDateStr(new Date(t.closed_at).getTime()) === today);
+  const net = todays.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0);
+  const wins = todays.filter((t) => t.status === "WIN").length, losses = todays.filter((t) => t.status === "LOSS").length;
+  const target = settings.futuresGoalUsd;
+  const lossToRecover = round(Math.max(0, todays.filter((t) => t.status === "LOSS").reduce((a, t) => a - (Number(t.pnl_usd) || 0), 0)), 2);
+  return { date: today, net: round(net, 2), wins, losses, trades: todays.length, target, remaining: round(Math.max(0, target - net), 2), reached: net >= target, lossToRecover };
+}
+// Futures: long OR short, both high-accuracy. (Ranking uses the shared paperScore.)
+function futuresEligible(s) {
+  if (s.direction !== "LONG" && s.direction !== "SHORT") return false;
+  if (!s.entry || !s.targets || s.confidence < TRACK_MIN_CONFIDENCE) return false;
+  if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return false;
+  if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
+  if (!s.quality || s.quality.score < 3) return false;
+  const eta = s.targets[0].etaMin;
+  if (settings.futuresMaxEtaMin > 0 && eta != null && eta > settings.futuresMaxEtaMin) return false;
+  return true;
+}
+async function fillFutures(signals) {
+  if (!settings.futuresTrading) return;
+  const ranked = signals.filter(futuresEligible).sort((a, b) => paperScore(b) - paperScore(a));
+  for (const s of ranked) {
+    if (await fstore.countOpen() >= settings.futuresMaxOpen) break;
+    const acct = await futuresAccount();
+    if (acct.cash < 1) break;
+    if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") continue; // trade with the trend
+    if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s.direction === "SHORT") continue;
+    if (await fstore.hasOpen(s.symbol)) continue;
+    await openFutures(s, Math.min(settings.futuresMarginUsd, acct.cash)).catch((e) => console.warn("[futures]", e.message));
+  }
+}
+async function openFutures(s, margin) {
+  if (margin == null) { const a = await futuresAccount(); margin = Math.min(settings.futuresMarginUsd, a.cash); }
+  if (margin < 1) return;
+  const lev = Math.max(1, settings.futuresLeverage), notional = round(margin * lev, 2);
+  const { idx, t: tgt } = tpTarget(s, settings.futuresTpLevel);
+  const long = s.direction === "LONG";
+  const entry = s.priceUsd, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
+  const qty = notional / entry, eta1 = tgt.etaMin ?? null;
+  const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
+  const proj = round(notional * g1 / 100, 2);                        // profit at TP (on notional)
+  let loss = round(notional * riskPct / 100, 2); if (loss > margin) loss = margin; // capped at margin
+  const alloc = round((margin / Math.max(1, settings.futuresCapitalUsd)) * 100, 0);
+  const liqPct = round(100 / lev, 1), liq = long ? entry * (1 - 1 / lev) : entry * (1 + 1 / lev);
+  const id = await fstore.insert({ symbol: s.symbol, tf: s.tf, direction: s.direction, confidence: s.confidence, entry_price: entry, tp1, stop, cost_usd: round(margin, 2), qty: Number(qty.toPrecision(8)), quality: s.quality.tier, eta1_min: eta1, roi_score: round(paperScore(s), 3), leverage: lev, notional_usd: notional, tp_level: idx + 1 });
+  console.log(`[futures] ${s.direction} ${s.symbol} margin $${round(margin, 2)} ${lev}x notional $${notional} TP${idx + 1} ${tp1} stop ${stop} (R:R ${rr})`);
+  await tgBroadcast(fmtPaperBuy({
+    kind: "futures", symbol: s.symbol, direction: s.direction, leverage: lev, quality: s.quality.tier, confidence: s.confidence, alloc, rr,
+    cost: round(margin, 2), notional, qty: Number(qty.toPrecision(5)), entry, tp1, tpLevel: idx + 1, gainPct: g1, proj, stop, riskPct, loss,
+    liq: rp(liq), liqPct, etaSL: eta1 != null ? slClock(Date.now() + eta1 * 60000) : null, etaLabel: tgt.etaLabel,
+  }));
+  return id;
+}
+async function manageFutures(prices) {
+  let open; try { open = await fstore.openTrades(); } catch (e) { return; }
+  for (const t of open) {
+    const P = prices.get(t.symbol);
+    if (P == null) continue;
+    const long = t.direction === "LONG";
+    const hitTp = long ? P >= t.tp1 : P <= t.tp1;
+    const hitStop = long ? P <= t.stop : P >= t.stop;
+    if (!hitTp && !hitStop) continue;
+    const exit = hitTp ? t.tp1 : t.stop;
+    const movePct = (long ? (exit - t.entry_price) : (t.entry_price - exit)) / t.entry_price * 100;
+    let pnl = (Number(t.notional_usd) || 0) * movePct / 100;         // leveraged $ result
+    if (pnl < -t.cost_usd) pnl = -t.cost_usd;                        // can't lose more than the margin
+    const pnlPct = round(movePct * (t.leverage || 1), 2);           // return on margin
+    const status = hitTp ? "WIN" : "LOSS";
+    await fstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: pnlPct, closed_at: new Date() });
+    const acct = await futuresAccount();
+    console.log(`[futures] CLOSE ${t.direction} ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash}`);
+    const day = await futuresDaily();
+    await tgBroadcast(fmtPaperSell({
+      kind: "futures", symbol: t.symbol, direction: t.direction, leverage: t.leverage, win: hitTp, tpLevel: t.tp_level || 1,
+      cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2), pnl: round(pnl, 2), pnlPct,
+      balance: round(settings.futuresCapitalUsd + acct.realized, 2), realized: acct.realized, day,
     }));
   }
 }
@@ -1266,6 +1400,15 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (b.paperPositionUsd != null && Number.isFinite(+b.paperPositionUsd)) settings.paperPositionUsd = Math.max(1, +b.paperPositionUsd);
   if (b.paperGoalUsd != null && Number.isFinite(+b.paperGoalUsd)) settings.paperGoalUsd = Math.max(1, +b.paperGoalUsd);
   if (b.paperMaxEtaMin != null && Number.isFinite(+b.paperMaxEtaMin)) settings.paperMaxEtaMin = Math.max(0, Math.round(+b.paperMaxEtaMin));
+  if (b.paperTpLevel != null && Number.isFinite(+b.paperTpLevel)) settings.paperTpLevel = Math.min(3, Math.max(1, Math.round(+b.paperTpLevel)));
+  if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
+  if (b.futuresCapitalUsd != null && Number.isFinite(+b.futuresCapitalUsd)) settings.futuresCapitalUsd = Math.max(1, +b.futuresCapitalUsd);
+  if (b.futuresMarginUsd != null && Number.isFinite(+b.futuresMarginUsd)) settings.futuresMarginUsd = Math.max(1, +b.futuresMarginUsd);
+  if (b.futuresLeverage != null && Number.isFinite(+b.futuresLeverage)) settings.futuresLeverage = Math.min(125, Math.max(1, Math.round(+b.futuresLeverage)));
+  if (b.futuresMaxOpen != null && Number.isFinite(+b.futuresMaxOpen)) settings.futuresMaxOpen = Math.max(1, Math.min(20, Math.round(+b.futuresMaxOpen)));
+  if (b.futuresGoalUsd != null && Number.isFinite(+b.futuresGoalUsd)) settings.futuresGoalUsd = Math.max(1, +b.futuresGoalUsd);
+  if (b.futuresMaxEtaMin != null && Number.isFinite(+b.futuresMaxEtaMin)) settings.futuresMaxEtaMin = Math.max(0, Math.round(+b.futuresMaxEtaMin));
+  if (b.futuresTpLevel != null && Number.isFinite(+b.futuresTpLevel)) settings.futuresTpLevel = Math.min(3, Math.max(1, Math.round(+b.futuresTpLevel)));
   if (b.clearKeys === true) { settings.apiKey = ""; settings.apiSecret = ""; settings.autoTrade = false; }
   lastTnError = null;
   await saveSettings();
@@ -1346,9 +1489,36 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
   const day = await paperDaily();
   const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null; // progress is DAILY net
-  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
+
+// Built-in paper FUTURES trading: leveraged margin account + open/closed positions.
+app.get("/api/futures/trades", wrap(async (_req, res) => {
+  const prices = await getTickerMap().catch(() => new Map());
+  const rows = await fstore.all(200);
+  const open = rows.filter((t) => t.status === "OPEN").map((t) => {
+    const P = prices.get(t.symbol), long = t.direction === "LONG";
+    const movePct = P != null ? (long ? (P - t.entry_price) : (t.entry_price - P)) / t.entry_price * 100 : null;
+    let uPnl = movePct != null ? (Number(t.notional_usd) || 0) * movePct / 100 : null;
+    if (uPnl != null && uPnl < -t.cost_usd) uPnl = -t.cost_usd;
+    const tpPct = (long ? (t.tp1 - t.entry_price) : (t.entry_price - t.tp1)) / t.entry_price * 100;
+    const tp1ProfitUsd = round((Number(t.notional_usd) || 0) * tpPct / 100, 2);
+    const liq = long ? t.entry_price * (1 - 1 / (t.leverage || 1)) : t.entry_price * (1 + 1 / (t.leverage || 1));
+    const openedMs = new Date(t.opened_at).getTime();
+    const etaTp1SL = t.eta1_min != null ? slClock(openedMs + t.eta1_min * 60000) : null;
+    const etaLeftMin = t.eta1_min != null ? Math.round((openedMs + t.eta1_min * 60000 - Date.now()) / 60000) : null;
+    return { ...t, livePrice: P ?? null, unrealizedUsd: uPnl == null ? null : round(uPnl, 2), unrealizedPct: movePct == null ? null : round(movePct * (t.leverage || 1), 2), tp1Pct: round(tpPct, 2), tp1ProfitUsd, liqPrice: rp(liq), etaTp1SL, etaLeftMin };
+  });
+  const closed = rows.filter((t) => t.status === "WIN" || t.status === "LOSS");
+  const a = await futuresAccount();
+  const equity = round(settings.futuresCapitalUsd + a.realized + open.reduce((s, t) => s + (t.unrealizedUsd || 0), 0), 2);
+  const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
+  const day = await futuresDaily();
+  const goal = settings.futuresGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null;
+  res.json({ enabled: settings.futuresTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, equityUsd: equity, realizedUsd: a.realized, marginPerTrade: settings.futuresMarginUsd, leverage: settings.futuresLeverage, maxOpen: settings.futuresMaxOpen, tpLevel: settings.futuresTpLevel, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.futuresMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+}));
+app.post("/api/futures/reset", wrap(async (_req, res) => { await fstore.reset(); res.json({ ok: true }); }));
 
 app.get("/api/regime", wrap(async (_req, res) => res.json(marketRegime)));
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
@@ -1388,6 +1558,7 @@ const WIN_LINE = { OPEN: "✅ *ENTER NOW* — price is in the zone", WAIT: "⏳ 
 const TG_FOOTER = "📊 _Trade smart. Manage risk. Follow the system._";
 const DISC_PAPER = "⚠️ _Paper trade for demonstration purposes. Crypto markets are volatile; no profit is guaranteed._";
 const DISC_SIGNAL = "⚠️ _Not financial advice. Crypto markets are volatile — manage your risk._";
+const DISC_FUTURES = "⚠️ _Paper futures for demonstration. Leverage multiplies losses as well as gains — a small adverse move can liquidate the position. No profit is guaranteed._";
 // A clean, structured signal card for Telegram, with leverage profit/loss projections.
 function fmtSignalCard(s) {
   const long = s.direction === "LONG";
@@ -1579,7 +1750,8 @@ async function liveTick() {
     updateLivePrices(prices);
     await monitor(prices); // catch TP/SL hits near-instantly
     await manageTestnet(prices); // close testnet trades at TP1/stop
-    await managePaper(prices);   // close paper trades at TP1/stop (simulated)
+    await managePaper(prices);   // close spot paper trades at TP/stop
+    await manageFutures(prices);  // close futures paper trades at TP/stop
   } catch (e) { console.warn("[live]", e.message); } finally { liveBusy = false; }
 }
 async function indicatorTick() {
@@ -1611,4 +1783,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, settings };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, fillFutures, fstore, settings };

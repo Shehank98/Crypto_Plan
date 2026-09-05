@@ -86,6 +86,7 @@
         <label class="flex items-center gap-1 text-sm text-slate-300">Capital $ <input id="paper-cap" type="number" min="10" step="10" value="200" class="w-24 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">$ / trade <input id="paper-pos" type="number" min="1" step="5" value="20" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Max open <input id="paper-max" type="number" min="1" max="20" value="5" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Exit at <select id="paper-tp" class="rounded border border-edge bg-ink px-2 py-1 text-sm"><option value="1">TP1 (1:1)</option><option value="2">TP2 (2:1)</option><option value="3">TP3 (3:1)</option></select></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Goal $/day <input id="paper-goal-usd" type="number" min="1" step="1" value="10" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Max TP1 wait (min, 0=any) <input id="paper-eta" type="number" min="0" step="30" value="0" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <button id="paper-save" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
@@ -99,6 +100,35 @@
       <div class="card p-4">
         <h3 class="mb-2 text-sm font-semibold text-slate-300">Closed trades</h3>
         <div class="overflow-x-auto"><table class="w-full text-sm" id="paper-recent"></table></div>
+      </div>
+    </div>
+
+    <!-- FUTURES PAPER TAB -->
+    <div id="tab-futures" class="hidden">
+      <div class="mb-3 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
+        <b class="text-slate-300">Leveraged futures paper trading.</b> Same method as spot — ranks good ≥95% coins by ROI/time/accuracy and rotates — but with <b class="text-amber-300">leverage</b> and <b>long + short</b>. Margin × leverage = notional; profit & loss are on the notional. Sells at TP or the stop; the loss is capped at the margin (liquidation). <b class="text-rose-400">High risk</b> — a small adverse move can wipe the margin. Fake money, 24/7.
+      </div>
+      <div id="fut-goal" class="mb-3 hidden rounded-lg border border-edge px-3 py-2 text-sm"></div>
+      <div id="fut-cards" class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4"></div>
+      <div class="mb-4 flex flex-wrap items-center gap-3">
+        <label class="flex items-center gap-2 text-sm text-slate-300"><input id="fut-on" type="checkbox" class="h-4 w-4" /> <b>Auto-trade</b> (long + short)</label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Capital $ <input id="fut-cap" type="number" min="10" step="10" value="200" class="w-24 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Margin/trade $ <input id="fut-margin" type="number" min="1" step="1" value="10" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Leverage <input id="fut-lev" type="number" min="1" max="125" value="20" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" />x</label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Max open <input id="fut-max" type="number" min="1" max="20" value="5" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Exit at <select id="fut-tp" class="rounded border border-edge bg-ink px-2 py-1 text-sm"><option value="1">TP1 (1:1)</option><option value="2">TP2 (2:1)</option><option value="3">TP3 (3:1)</option></select></label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Goal $/day <input id="fut-goal-usd" type="number" min="1" step="1" value="10" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+        <button id="fut-save" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
+        <button id="fut-reset" class="ml-auto rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm text-rose-300 hover:bg-edge">Reset account</button>
+        <span id="fut-status" class="text-xs"></span>
+      </div>
+      <div class="mb-4 card p-4">
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">Open positions <span class="text-xs font-normal text-slate-500">(auto-closed at TP or Stop / liquidation)</span></h3>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="fut-open"></table></div>
+      </div>
+      <div class="card p-4">
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">Closed trades</h3>
+        <div class="overflow-x-auto"><table class="w-full text-sm" id="fut-recent"></table></div>
       </div>
     </div>
 

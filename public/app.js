@@ -674,18 +674,20 @@ function drawTrackTf() {
   seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
-  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Paper Trading" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Spot Paper" }, { v: "futures", label: "⚡ Futures Paper" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
   $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     activeTab = b.dataset.tab;
     $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
     $("tab-track").classList.toggle("hidden", activeTab !== "track");
     $("tab-paper").classList.toggle("hidden", activeTab !== "paper");
+    $("tab-futures").classList.toggle("hidden", activeTab !== "futures");
     $("tab-forex").classList.toggle("hidden", activeTab !== "forex");
     $("tab-settings").classList.toggle("hidden", activeTab !== "settings");
     drawTabs();
     if (activeTab === "track") loadTrack();
     if (activeTab === "paper") loadPaper();
+    if (activeTab === "futures") loadFutures();
     if (activeTab === "settings") loadSettings();
     if (activeTab === "forex") loadForex();
   }));
@@ -806,6 +808,7 @@ async function loadPaper() {
   if ($("paper-cap") && p.startUsd != null) $("paper-cap").value = p.startUsd;
   if ($("paper-goal-usd") && p.goalUsd != null) $("paper-goal-usd").value = p.goalUsd;
   if ($("paper-eta") && p.maxEtaMin != null) $("paper-eta").value = p.maxEtaMin;
+  if ($("paper-tp") && p.tpLevel != null) $("paper-tp").value = p.tpLevel;
   const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
   // DAILY goal progress bar (resets at SL midnight). Trading continues past it.
   const d = p.daily;
@@ -841,7 +844,7 @@ async function loadPaper() {
 }
 async function savePaper() {
   try {
-    await api2("/api/settings", { paperTrading: $("paper-on").checked, paperMaxOpen: Number($("paper-max").value) || 5, paperPositionUsd: Number($("paper-pos").value) || 20, capitalUsd: Number($("paper-cap").value) || 200, paperGoalUsd: Number($("paper-goal-usd").value) || 10, paperMaxEtaMin: Number($("paper-eta").value) || 0 });
+    await api2("/api/settings", { paperTrading: $("paper-on").checked, paperMaxOpen: Number($("paper-max").value) || 5, paperPositionUsd: Number($("paper-pos").value) || 20, capitalUsd: Number($("paper-cap").value) || 200, paperGoalUsd: Number($("paper-goal-usd").value) || 10, paperMaxEtaMin: Number($("paper-eta").value) || 0, paperTpLevel: Number($("paper-tp").value) || 1 });
     $("paper-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
     loadPaper();
   } catch (e) { $("paper-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
@@ -849,6 +852,59 @@ async function savePaper() {
 async function resetPaper() {
   if (!confirm("Reset the paper account? This deletes all paper trades and returns the balance to your starting capital.")) return;
   try { await api2("/api/paper/reset", {}); $("paper-status").innerHTML = '<span class="text-amber-400">Account reset.</span>'; loadPaper(); } catch (e) { /* ignore */ }
+}
+
+// ---------- Futures paper (leveraged) ----------
+async function loadFutures() {
+  let p; try { p = await api("/api/futures/trades"); } catch (e) { return; }
+  if ($("fut-on")) $("fut-on").checked = !!p.enabled;
+  if ($("fut-cap") && p.startUsd != null) $("fut-cap").value = p.startUsd;
+  if ($("fut-margin") && p.marginPerTrade != null) $("fut-margin").value = p.marginPerTrade;
+  if ($("fut-lev") && p.leverage != null) $("fut-lev").value = p.leverage;
+  if ($("fut-max") && p.maxOpen != null) $("fut-max").value = p.maxOpen;
+  if ($("fut-tp") && p.tpLevel != null) $("fut-tp").value = p.tpLevel;
+  if ($("fut-goal-usd") && p.goalUsd != null) $("fut-goal-usd").value = p.goalUsd;
+  const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
+  const d = p.daily;
+  if ($("fut-goal") && p.goalUsd && d) {
+    const pct = Math.max(0, Math.min(100, p.goalPct || 0)); const done = d.reached;
+    let right, note = "";
+    if (done) right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}  ✅ reached — banking extra`;
+    else if (d.net < 0) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-amber-400">🔻 Recovering — need +$${round(d.remaining, 2)} more today; the next good trades cover it.</div>`; }
+    else { right = `+$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-slate-500">+$${round(d.remaining, 2)} to go${d.lossToRecover > 0 ? ` · covering -$${d.lossToRecover}` : ""}. Keeps trading after the goal.</div>`; }
+    $("fut-goal").classList.remove("hidden");
+    $("fut-goal").innerHTML = `<div class="mb-1 flex justify-between"><span>🎯 Today's goal: <b>$${p.goalUsd}/day</b> <span class="text-slate-500">(resets midnight SL · ${d.wins}W-${d.losses}L)</span></span><span class="${g(d.net)}">${right}</span></div><div class="h-2 w-full overflow-hidden rounded bg-ink"><div class="h-full ${done ? "bg-emerald-500" : "bg-indigo-500"}" style="width:${pct}%"></div></div>${note}`;
+    $("fut-goal").style.borderColor = done ? "rgb(16 185 129)" : "";
+  }
+  const card = (l, v, cls) => `<div class="rounded-lg border border-edge bg-panel px-3 py-2"><div class="text-[11px] uppercase text-slate-500">${l}</div><div class="text-lg font-semibold ${cls || "text-white"}">${v}</div></div>`;
+  const grow = p.equityUsd - p.startUsd;
+  const tp1Target = round(p.open.reduce((a, x) => a + (x.tp1ProfitUsd || 0), 0), 2);
+  $("fut-cards").innerHTML = [
+    card("Equity (live)", "$" + p.equityUsd, g(grow)),
+    card("Growth", (grow >= 0 ? "+" : "") + "$" + round(grow, 2) + " (" + (grow >= 0 ? "+" : "") + round((grow / p.startUsd) * 100, 1) + "%)", g(grow)),
+    card("Free margin", "$" + p.cashUsd),
+    card("In use", "$" + p.investedUsd),
+    card("If all TP hit", "+$" + tp1Target, "text-emerald-400"),
+    card("Realized PnL", (p.realizedUsd >= 0 ? "+" : "") + "$" + p.realizedUsd, g(p.realizedUsd)),
+    card("Win rate", (p.winRatePct == null ? "-" : p.winRatePct + "%") + `  ${p.wins}-${p.losses}`),
+    card("Leverage", p.leverage + "x"),
+  ].join("");
+  $("fut-open").innerHTML = p.open.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Side</th><th class="text-right">Entry</th><th class="text-right">Live</th><th class="text-right">TP</th><th class="text-right">Stop</th><th class="text-right">Liq</th><th class="text-right">Margin</th><th class="text-right">Notional</th><th class="text-right">P/L now</th><th class="text-right">TP → profit</th><th class="text-right">Est. TP (SL)</th></tr></thead><tbody>${p.open.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 ${x.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}">${x.direction} ${x.leverage}x</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${x.livePrice == null ? "-" : usd(x.livePrice)}</td><td class="py-1.5 text-right tabular-nums text-emerald-300">${usd(x.tp1)}</td><td class="py-1.5 text-right tabular-nums text-rose-300">${usd(x.stop)}</td><td class="py-1.5 text-right tabular-nums text-amber-400">${usd(x.liqPrice)}</td><td class="py-1.5 text-right tabular-nums">${x.cost_usd}</td><td class="py-1.5 text-right tabular-nums text-slate-400">${x.notional_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.unrealizedUsd)}">${x.unrealizedUsd == null ? "-" : (x.unrealizedUsd >= 0 ? "+" : "") + x.unrealizedUsd + " (" + (x.unrealizedPct >= 0 ? "+" : "") + x.unrealizedPct + "%)"}</td><td class="py-1.5 text-right tabular-nums text-emerald-400">+$${x.tp1ProfitUsd}</td><td class="py-1.5 text-right text-xs ${x.etaLeftMin != null && x.etaLeftMin < 0 ? "text-amber-400" : "text-slate-300"}">${x.etaTp1SL || "-"}${x.etaLeftMin != null ? `<br><span class="text-[11px] text-slate-500">${x.etaLeftMin > 0 ? "in ~" + x.etaLeftMin + "m" : "overdue"}</span>` : ""}</td></tr>`).join("")}</tbody>`
+    : `<tbody><tr><td class="py-3 text-slate-500">No open positions. A good ≥95% setup opens one automatically${p.enabled ? "" : " (turn on Auto-trade above)"}.</td></tr></tbody>`;
+  $("fut-recent").innerHTML = p.recent.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Side</th><th class="text-right">Entry</th><th class="text-right">Exit</th><th>Result</th><th class="text-right">Margin</th><th class="text-right">P/L $</th><th class="text-right">P/L %</th><th>Closed (SL)</th></tr></thead><tbody>${p.recent.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 ${x.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}">${x.direction}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${usd(x.exit_price)}</td><td class="py-1.5 text-xs ${x.status === "WIN" ? "text-emerald-400" : "text-rose-400"}">${x.status} (${x.exit_reason})</td><td class="py-1.5 text-right tabular-nums text-slate-400">${x.cost_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_usd)}">${x.pnl_usd >= 0 ? "+" : ""}${x.pnl_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_pct)}">${x.pnl_pct >= 0 ? "+" : ""}${x.pnl_pct}%</td><td class="py-1.5 text-xs text-slate-500">${slTime(x.closed_at)}</td></tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
+}
+async function saveFutures() {
+  try {
+    await api2("/api/settings", { futuresTrading: $("fut-on").checked, futuresCapitalUsd: Number($("fut-cap").value) || 200, futuresMarginUsd: Number($("fut-margin").value) || 10, futuresLeverage: Number($("fut-lev").value) || 20, futuresMaxOpen: Number($("fut-max").value) || 5, futuresTpLevel: Number($("fut-tp").value) || 1, futuresGoalUsd: Number($("fut-goal-usd").value) || 10 });
+    $("fut-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>'; loadFutures();
+  } catch (e) { $("fut-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function resetFutures() {
+  if (!confirm("Reset the futures paper account? This deletes all futures trades and returns the balance to your starting capital.")) return;
+  try { await api2("/api/futures/reset", {}); $("fut-status").innerHTML = '<span class="text-amber-400">Account reset.</span>'; loadFutures(); } catch (e) { /* ignore */ }
 }
 
 // ---------- Forex Bot ----------
@@ -967,7 +1023,10 @@ async function init() {
   // Paper trading wiring
   { const a = $("paper-save"); if (a) a.onclick = savePaper; }
   { const a = $("paper-reset"); if (a) a.onclick = resetPaper; }
+  { const a = $("fut-save"); if (a) a.onclick = saveFutures; }
+  { const a = $("fut-reset"); if (a) a.onclick = resetFutures; }
   setInterval(() => { if (activeTab === "paper") loadPaper(); }, 15000); // refresh paper PnL live
+  setInterval(() => { if (activeTab === "futures") loadFutures(); }, 15000);
   // Forex bot wiring
   $("fx-save").onclick = saveForex;
   $("fx-test").onclick = testForex;
