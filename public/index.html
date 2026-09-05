@@ -10,19 +10,30 @@
     tailwind.config = { theme: { extend: { colors: { ink: "#0b0e14", panel: "#131722", edge: "#1e2532" } } } };
   </script>
   <style>
-    body { background: radial-gradient(1200px 600px at 20% -10%, #16203a 0%, #0b0e14 55%); }
+    body { background: radial-gradient(1200px 600px at 20% -10%, #16203a 0%, #0b0e14 55%); overflow-x: hidden; }
     .glow { box-shadow: 0 0 0 1px rgba(99,102,241,.12), 0 8px 40px -14px rgba(56,189,248,.22); }
     .card { background: rgba(19,23,34,.9); border: 1px solid #1e2532; border-radius: 16px; }
     ::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background:#273043; border-radius: 8px; }
     .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+    /* Tabs: never wrap - scroll sideways on small screens instead of stacking. */
+    #tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    #tabs::-webkit-scrollbar { display: none; }
+    #tabs button { flex: 0 0 auto; white-space: nowrap; }
+    /* Comfortable tap targets on touch devices. */
+    @media (max-width: 640px) {
+      .card { border-radius: 12px; }
+      #chart { height: 300px !important; }
+      button, select, input[type="checkbox"] { touch-action: manipulation; }
+      table { font-size: 12px; }
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
-  <div class="mx-auto max-w-7xl px-4 py-6">
-    <header class="mb-5 flex flex-wrap items-center justify-between gap-3">
+  <div class="mx-auto max-w-7xl px-3 py-4 sm:px-4 sm:py-6">
+    <header class="mb-4 flex flex-wrap items-center justify-between gap-3 sm:mb-5">
       <div>
-        <h1 class="text-2xl font-bold text-white">📡 Crypto <span class="text-indigo-400">Signal Engine</span></h1>
-        <p class="text-sm text-slate-400">Trend-following signals across the top markets · entry · stop · targets · ETA · forecast</p>
+        <h1 class="text-xl font-bold text-white sm:text-2xl">📡 Crypto <span class="text-indigo-400">Signal Engine</span></h1>
+        <p class="hidden text-sm text-slate-400 sm:block">Trend-following signals across the top markets · entry · stop · targets · ETA · forecast</p>
       </div>
       <div class="flex items-center gap-2">
         <span id="updated" class="text-xs text-slate-500"></span>
@@ -39,7 +50,7 @@
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <div id="tf-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
         <div id="filter-buttons" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
-        <input id="search" placeholder="Filter coin… e.g. BTC" class="w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
+        <input id="search" placeholder="Filter coin… e.g. BTC" class="w-full sm:w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
         <span id="summary" class="ml-auto text-xs text-slate-400"></span>
       </div>
       <div id="signals" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"></div>
@@ -52,7 +63,7 @@
       <div id="track-diag" class="mb-3 hidden rounded-lg border px-3 py-2 text-xs"></div>
       <div class="mb-3 flex flex-wrap items-center gap-3">
         <div id="track-tf" class="flex overflow-hidden rounded-lg border border-edge text-xs"></div>
-        <input id="track-search" placeholder="Search coin… e.g. BTC" class="w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
+        <input id="track-search" placeholder="Search coin… e.g. BTC" class="w-full sm:w-40 rounded-lg border border-edge bg-ink px-3 py-1.5 text-sm outline-none focus:border-indigo-500" />
       </div>
       <p class="mb-4 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
         <b class="text-slate-300">Open R</b> = current profit in units of risk (1R = your entry→stop distance). +1R means up by the amount you risked.
@@ -292,7 +303,7 @@
 
   <!-- Chart modal -->
   <div id="chart-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-3">
-    <div class="card w-full max-w-5xl p-4">
+    <div class="card w-full max-w-5xl p-4" style="max-height:92vh; overflow-y:auto">
       <div class="mb-2 flex items-center justify-between">
         <h3 id="chart-title" class="text-lg font-bold text-white"></h3>
         <div class="flex items-center gap-2">

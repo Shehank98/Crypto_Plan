@@ -934,7 +934,7 @@ function renderFxParams(s) {
   const key = ($("fx-strategy") && $("fx-strategy").value) || s.strategy;
   const p = ((s.strategies && s.strategies[key]) || {}).defaults || s.params || {};
   const cur = s.params || {};
-  $("fx-params").innerHTML = `<label class="mb-1 block text-xs text-slate-400">Strategy parameters</label><div class="grid grid-cols-3 gap-2">${Object.keys(p).map((k) => `<div><span class="text-[11px] text-slate-500">${k}</span><input data-param="${k}" type="number" step="any" value="${cur[k] ?? p[k]}" class="w-full rounded border border-edge bg-ink px-2 py-1 text-xs" /></div>`).join("")}</div>`;
+  $("fx-params").innerHTML = `<label class="mb-1 block text-xs text-slate-400">Strategy parameters</label><div class="grid grid-cols-2 gap-2 sm:grid-cols-3">${Object.keys(p).map((k) => `<div><span class="text-[11px] text-slate-500">${k}</span><input data-param="${k}" type="number" step="any" value="${cur[k] ?? p[k]}" class="w-full rounded border border-edge bg-ink px-2 py-1 text-xs" /></div>`).join("")}</div>`;
 }
 function fxParamsBody() { const o = {}; document.querySelectorAll("#fx-params [data-param]").forEach((i) => { if (i.value !== "") o[i.dataset.param] = Number(i.value); }); return o; }
 async function saveForex() {
