@@ -1724,6 +1724,7 @@ const TG_HELP = "📡 *Signal Engine - commands*\n\n"
   + "/signal `SYMBOL` - full card for one coin (e.g. /signal BTC)\n"
   + "/tf `15m|1h|4h|1d` - change the timeframe (now: " + "%TF%" + ")\n"
   + "/stats - track record (win rate)\n"
+  + "/summary - today's P&L for both paper books\n"
   + "/help - this list\n\n"
   + "_Only ≥95% setups reach here - the same bar as the Track Record. Every card shows the entry ZONE (a range), so a small move while you read it still lets you get in._";
 async function proposeTrade(s) {
@@ -1829,6 +1830,7 @@ function startTelegram() {
       bot.sendMessage(m.chat.id, `✅ Timeframe set to *${TF_LABEL[cmdTf] || cmdTf}*. Try /signals`, { parse_mode: "Markdown" });
     });
     bot.onText(/^\/stats\b/, async (m) => { const s = await computeStats(); bot.sendMessage(m.chat.id, `📈 *Track record*\nWin rate: ${s.winRatePct ?? "-"}% (${s.wins}/${s.decided})\nTP1 ${s.tp1RatePct ?? "-"}% · TP2 ${s.tp2RatePct ?? "-"}% · TP3 ${s.tp3RatePct ?? "-"}%\nAvg R: ${s.avgResultR ?? "-"} · Open: ${s.open}${s.durable ? "" : "\n(in-memory - set DATABASE_URL to persist)"}`, { parse_mode: "Markdown" }); });
+    bot.onText(/^\/summary\b/, async (m) => { chats.add(String(m.chat.id)); await sendDailySummary().catch(() => bot.sendMessage(m.chat.id, "Couldn't build the summary right now.")); });
     bot.on("polling_error", (e) => console.warn("[telegram]", e.message));
     console.log("[telegram] started");
   } catch (e) { console.warn("[telegram] failed:", e.message); }
@@ -1857,11 +1859,13 @@ const alerted = new Map();
 // ===========================================================================
 let liveBusy = false;
 let indBusy = false;
+let lastDataOkAt = Date.now(), dataDownAlerted = false;
 async function liveTick() {
   if (liveBusy) return;
   liveBusy = true;
   try {
     const prices = await getTickerMap(); // one request for the whole market
+    if (prices.size) { lastDataOkAt = Date.now(); if (dataDownAlerted) { dataDownAlerted = false; tgBroadcast("✅ *Data feed recovered* - the market scanner is live again."); } }
     updateLivePrices(prices);
     await monitor(prices); // catch TP/SL hits near-instantly
     await manageTestnet(prices); // close testnet trades at TP1/stop
@@ -1882,10 +1886,37 @@ async function indicatorTick() {
     }
   } catch (e) { console.warn("[indicators]", e.message); } finally { indBusy = false; }
 }
+// Health heartbeat: if the market feed goes stale, tell you once (a silent bot
+// is a dangerous bot). Recovery is announced from liveTick.
+async function healthCheck() {
+  const stale = Date.now() - lastDataOkAt > 12 * 60_000; // no good prices for 12 min
+  if (stale && !dataDownAlerted) { dataDownAlerted = true; await tgBroadcast("⚠️ *Data feed down* - no market prices for 12+ min. Trades aren't being managed. Check the proxy / host."); }
+}
+// End-of-day performance summary (both books) pushed to Telegram.
+async function sendDailySummary() {
+  if (!bot || chats.size === 0) return;
+  const sd = (n) => (n >= 0 ? "+$" : "-$") + Math.abs(round(n, 2));
+  const block = async (label, day, acct, startCap, an) => {
+    if (!an.trades && !day.trades) return `*${label}:* no trades today.`;
+    return `*${label}*\n`
+      + `Today: ${sd(day.net)} (${day.wins}W-${day.losses}L${day.reached ? ", 🎯 goal hit" : ""})\n`
+      + `Balance: $${round(startCap + acct.realized, 2)} · All-time: ${sd(acct.realized)}\n`
+      + `Win rate ${an.winRatePct ?? "-"}% · PF ${an.profitFactor ?? "∞"} · Exp ${sd(an.expectancyUsd)}/trade · Max DD -$${an.maxDrawdownUsd}`;
+  };
+  const [pDay, pAcct, pAn] = [await paperDaily(), await paperAccount(), bookAnalytics(await pstore.all(5000), settings.capitalUsd)];
+  const [fDay, fAcct, fAn] = [await futuresDaily(), await futuresAccount(), bookAnalytics(await fstore.all(5000), settings.futuresCapitalUsd)];
+  const msg = `📊 *Daily Summary - ${slDateStr(Date.now())}*\n\n`
+    + (await block("📝 Spot", pDay, pAcct, settings.capitalUsd, pAn)) + `\n\n`
+    + (await block("⚡ Futures", fDay, fAcct, settings.futuresCapitalUsd, fAn)) + `\n\n`
+    + `${TG_FOOTER}\n\n${DISC_PAPER}`;
+  await tgBroadcast(msg);
+}
 function startLoops() {
   setInterval(liveTick, SCAN_INTERVAL_SEC * 1000);            // prices + hits every ~5s (1 request)
   setInterval(indicatorTick, INDICATOR_REFRESH_SEC * 1000);   // full indicator rescan periodically
   cron.schedule("*/15 * * * *", () => signalAlerts().catch((e) => console.warn("[cron alert]", e.message)));
+  cron.schedule("*/10 * * * *", () => healthCheck().catch(() => {}));          // feed heartbeat
+  cron.schedule("30 17 * * *", () => sendDailySummary().catch((e) => console.warn("[summary]", e.message))); // ~23:00 SL end-of-day
   console.log(`[loop] live prices/monitor every ${SCAN_INTERVAL_SEC}s · indicators every ${INDICATOR_REFRESH_SEC}s`);
 }
 async function boot() {
