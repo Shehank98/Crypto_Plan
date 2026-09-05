@@ -118,7 +118,7 @@ function card(s) {
     ${s.entry.enterMsg ? `<p class="mt-1 text-[11px] ${closed ? "text-rose-300" : s.entry.window === "OPEN" ? "text-emerald-300" : "text-slate-400"}">${s.entry.enterMsg}</p>` : ""}
     ${trackedBadge(s.tracked)}
     <div class="mt-2 space-y-1 rounded-lg border border-edge bg-ink/50 p-2">
-      <div class="flex justify-between text-sm"><span class="text-slate-400">Entry</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} – ${usd(s.entry.high)}</span></div>
+      <div class="flex justify-between text-sm"><span class="text-slate-400">Entry</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} - ${usd(s.entry.high)}</span></div>
       <div class="flex justify-between text-sm"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${usd(s.stop.priceUsd)} <span class="text-slate-500">-${s.stop.riskPct}%</span></span></div>
       <div class="my-1 border-t border-edge"></div>${tps}
     </div>
@@ -472,7 +472,7 @@ async function openChart(sym, tfv) {
     if (sig.fib) { line(sig.fib.retr["0.5"], "#a78bfa", 3, "Fib 0.5"); line(sig.fib.retr["0.618"], "#a78bfa", 3, "Fib 0.618"); }
     $("chart-plan").innerHTML = [
       `<span class="pill ${sig.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${sig.direction} ${sig.confidence}%</span>`,
-      `<span class="pill bg-slate-800">Entry ${usd(sig.entry.low)}–${usd(sig.entry.high)}</span>`,
+      `<span class="pill bg-slate-800">Entry ${usd(sig.entry.low)}-${usd(sig.entry.high)}</span>`,
       `<span class="pill bg-slate-800 text-rose-300">Stop ${usd(sig.stop.priceUsd)} (-${sig.stop.riskPct}%)</span>`,
       ...sig.targets.map((t) => `<span class="pill bg-slate-800 text-emerald-300">${t.name} +${t.gainPct}% · ${usd(t.priceUsd)} · ${t.etaLabel}</span>`),
     ].join(" ");
@@ -553,7 +553,7 @@ async function openAnalysis(sym, tfv) {
   // Plan
   const plan = s.entry ? `
     <div class="rounded-lg border border-edge bg-ink/50 p-3">
-      <div class="flex justify-between py-0.5"><span class="text-slate-400">Entry zone</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} – ${usd(s.entry.high)} <span class="text-xs ${s.entry.status === "READY" ? "text-emerald-400" : "text-amber-400"}">${s.entry.status}</span></span></div>
+      <div class="flex justify-between py-0.5"><span class="text-slate-400">Entry zone</span><span class="tabular-nums text-slate-100">${usd(s.entry.low)} - ${usd(s.entry.high)} <span class="text-xs ${s.entry.status === "READY" ? "text-emerald-400" : "text-amber-400"}">${s.entry.status}</span></span></div>
       <div class="flex justify-between py-0.5"><span class="text-rose-400">Stop</span><span class="tabular-nums text-rose-300">${usd(s.stop.priceUsd)} (-${s.stop.riskPct}%)</span></div>
       ${s.targets.map((t) => `<div class="flex justify-between py-0.5"><span class="text-slate-400">${t.name} <span class="text-slate-600">${t.rr}R</span></span><span class="tabular-nums"><span class="text-emerald-400">+${t.gainPct}%</span> · ${usd(t.priceUsd)} <span class="text-slate-500">${t.etaLabel}</span></span></div>`).join("")}
       <div class="mt-2 space-y-1 border-t border-edge pt-2 text-xs text-slate-400">
@@ -785,7 +785,7 @@ async function testProxies() {
     }).join("");
     document.querySelectorAll(".proxy-use").forEach((b) => b.onclick = () => {
       $("set-proxy").value = decodeURIComponent(b.dataset.proxy);
-      $("proxy-status").innerHTML = '<span class="text-emerald-400">Filled the Proxy URL above — click Save to keep it.</span>';
+      $("proxy-status").innerHTML = '<span class="text-emerald-400">Filled the Proxy URL above - click Save to keep it.</span>';
       $("set-proxy").scrollIntoView({ behavior: "smooth", block: "center" });
     });
   } catch (e) { $("proxy-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
@@ -828,8 +828,8 @@ async function loadPaper() {
     const pct = Math.max(0, Math.min(100, p.goalPct || 0));
     const done = d.reached;
     let right, note = "";
-    if (done) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}  ✅ reached — banking extra`; }
-    else if (d.net < 0) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-amber-400">🔻 Recovering a stop-loss — need +$${round(d.remaining, 2)} more today; the next good trades cover it.</div>`; }
+    if (done) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}  ✅ reached - banking extra`; }
+    else if (d.net < 0) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-amber-400">🔻 Recovering a stop-loss - need +$${round(d.remaining, 2)} more today; the next good trades cover it.</div>`; }
     else { right = `+$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-slate-500">+$${round(d.remaining, 2)} to go${d.lossToRecover > 0 ? ` · covering -$${d.lossToRecover} of stops today` : ""}. Keeps trading after the goal.</div>`; }
     $("paper-goal").classList.remove("hidden");
     $("paper-goal").innerHTML = `<div class="mb-1 flex justify-between"><span>🎯 Today's goal: <b>$${p.goalUsd}/day</b> <span class="text-slate-500">(resets midnight SL · ${d.wins}W-${d.losses}L)</span></span><span class="${g(d.net)}">${right}</span></div><div class="h-2 w-full overflow-hidden rounded bg-ink"><div class="h-full ${done ? "bg-emerald-500" : "bg-indigo-500"}" style="width:${pct}%"></div></div>${note}`;
@@ -883,8 +883,8 @@ async function loadFutures() {
   if ($("fut-goal") && p.goalUsd && d) {
     const pct = Math.max(0, Math.min(100, p.goalPct || 0)); const done = d.reached;
     let right, note = "";
-    if (done) right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}  ✅ reached — banking extra`;
-    else if (d.net < 0) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-amber-400">🔻 Recovering — need +$${round(d.remaining, 2)} more today; the next good trades cover it.</div>`; }
+    if (done) right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}  ✅ reached - banking extra`;
+    else if (d.net < 0) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-amber-400">🔻 Recovering - need +$${round(d.remaining, 2)} more today; the next good trades cover it.</div>`; }
     else { right = `+$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-slate-500">+$${round(d.remaining, 2)} to go${d.lossToRecover > 0 ? ` · covering -$${d.lossToRecover}` : ""}. Keeps trading after the goal.</div>`; }
     $("fut-goal").classList.remove("hidden");
     $("fut-goal").innerHTML = `<div class="mb-1 flex justify-between"><span>🎯 Today's goal: <b>$${p.goalUsd}/day</b> <span class="text-slate-500">(resets midnight SL · ${d.wins}W-${d.losses}L)</span></span><span class="${g(d.net)}">${right}</span></div><div class="h-2 w-full overflow-hidden rounded bg-ink"><div class="h-full ${done ? "bg-emerald-500" : "bg-indigo-500"}" style="width:${pct}%"></div></div>${note}`;

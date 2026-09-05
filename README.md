@@ -3,21 +3,21 @@
 A **signals-only** crypto scalping/day-trading engine. It scans the **top-N most-liquid
 markets**, and for each emits a **trend-following** trade signal:
 
-- **Direction** — LONG / SHORT / NEUTRAL, with a **confidence** score
+- **Direction** - LONG / SHORT / NEUTRAL, with a **confidence** score
 - **Entry zone** (a pullback range) + a **READY / WAIT** status
 - **Stop** (below/above structure) with **% risk** and an invalidation note
 - **TP1 / TP2 / TP3** at 1R / 2R / 3R, each with an **ATR-based ETA**
 - A short-horizon **price forecast** (predicted price + range)
 - The **reasons** behind the call
 
-No database, no portfolio, no accounts — just signals. One Node service, static
+No database, no portfolio, no accounts - just signals. One Node service, static
 dashboard, Telegram optional.
 
 ## How signals work
 
 Design informed by how **freqtrade** (regime filter → entry/exit → time-based targets),
 **hummingbot** (multi-pair scanning), **ccxt** (unified market data) and **QuantDinger**
-(indicator markers) operate — reimplemented from scratch in Node (no external trading
+(indicator markers) operate - reimplemented from scratch in Node (no external trading
 libraries).
 
 1. **Regime filter (trend):** a coin is in an uptrend when `price > EMA200` and
@@ -25,7 +25,7 @@ libraries).
 2. **Confidence** is built from trend confirmation: EMA alignment, MACD momentum with the
    trend, price on the trend side of VWAP, trend strength (EMA separation / ATR), and RSI
    health. Being *overbought in an uptrend keeps the LONG* (it just nudges toward waiting
-   for a pullback) — it does **not** flip you short. That's why you get real signals, not
+   for a pullback) - it does **not** flip you short. That's why you get real signals, not
    endless NEUTRAL.
 3. **Trade plan:** entry zone around the EMA20/VWAP pullback, stop beyond the recent swing
    (± ATR), TP1/2/3 at 1R/2R/3R, ETA from ATR velocity, and a drift+ATR price forecast.
@@ -46,7 +46,7 @@ BTC/ETH-like (deep liquidity, low volatility), the higher the tier. A **⭐ Qual
 only Solid+ coins, and auto-trade can be restricted to them. Blue-chips ride out sideways chop
 and recover, so a **Hold-through-dips** option can drop the stop and hold a spot until TP1.
 
-Indicators (all dependency-free, reimplemented from scratch — inspired by **ta-lib** and
+Indicators (all dependency-free, reimplemented from scratch - inspired by **ta-lib** and
 **ccxt**, not depending on them): EMA/SMA, RSI, MACD, Bollinger, ATR, VWAP, MFI, **ADX**
 (trend strength), **Stochastic RSI** (entry timing), **CCI**, **Williams %R**, **OBV**
 (volume accumulation/distribution), **Parabolic SAR** (trailing trend side) and
@@ -54,39 +54,39 @@ Indicators (all dependency-free, reimplemented from scratch — inspired by **ta
 to the confidence score so weak setups are filtered out.
 
 **Multi-timeframe confluence (accuracy):** a signal is boosted when the **next timeframe up**
-agrees and penalised when it conflicts — the chain runs **15m → 1h → 4h → 1d**, so a 4h LONG
+agrees and penalised when it conflicts - the chain runs **15m → 1h → 4h → 1d**, so a 4h LONG
 must line up with the **daily** trend. It reuses the higher-TF scan, so it costs no extra API
 calls. This is the single biggest lift to win rate.
 
 **Click any card → full analysis** (`GET /api/analysis/:symbol?tf=1h`): direction + confidence,
 a **multi-timeframe agreement** table (15m/1h/4h/1d) with a consensus verdict, every indicator with
 a plain-English read, detected candlestick patterns, the full trade plan with reasons, and a
-historical backtest — all in one popup.
+historical backtest - all in one popup.
 
 **Entry window (don't chase):** every card shows whether it's still worth entering *from the
-current price* — **Enter now** (in the zone), **Wait for pullback**, **Extended - don't chase**,
+current price* - **Enter now** (in the zone), **Wait for pullback**, **Extended - don't chase**,
 or **Entry window closed** (price ran, risk:reward gone). It's driven by the **live risk:reward**
 from the current price to TP1, and closed setups are dimmed.
 
 **Risk:reward + Fibonacci:** the analysis shows **R:R to each target** (1:1 / 2:1 / 3:1) and the
 **live R:R from the current price**, plus **Fibonacci** retracement (0.382 / 0.5 / 0.618 / 0.786)
-and extension (1.272 / 1.618) levels — with the **0.5-0.618 "golden pocket"** flagged and drawn
+and extension (1.272 / 1.618) levels - with the **0.5-0.618 "golden pocket"** flagged and drawn
 on the chart.
 
-**Trading psychology:** each signal carries a short **discipline checklist** — size by the 1-2%
+**Trading psychology:** each signal carries a short **discipline checklist** - size by the 1-2%
 rule, take partial at TP1 and move the stop to break-even, never widen a stop, and a FOMO warning
 when price has already run.
 
-**Live status on every card:** once a signal is logged, its card shows what happened next —
+**Live status on every card:** once a signal is logged, its card shows what happened next -
 **⏳ Waiting for entry**, **🔵 In trade**, **🎯 TP1/TP2/TP3 hit**, **✅ WIN +R**, or
-**🛑 Stopped** — plus the current **Open R** while it's live. So you don't just see the plan,
+**🛑 Stopped** - plus the current **Open R** while it's live. So you don't just see the plan,
 you see whether it's working.
 
 **Confirm on a chart:** click **📈 Chart** on any signal for a candlestick chart
 (TradingView Lightweight Charts) with EMA 20/50/200 and the signal's **entry zone, stop and
 TP1/2/3 drawn as price lines**. Below the chart a **"Why these lines"** panel explains *how
-each level was decided* — why the entry sits at the EMA20/VWAP pullback, why the stop is
-beyond the swing ± ATR, and why the targets are at 1R/2R/3R — so you can judge the setup, not
+each level was decided* - why the entry sits at the EMA20/VWAP pullback, why the stop is
+beyond the swing ± ATR, and why the targets are at 1R/2R/3R - so you can judge the setup, not
 just take it on faith.
 
 **ETA accuracy:** every signal logs its **estimated** time-to-TP1; when the trade actually
@@ -97,11 +97,11 @@ ATR-based ballpark, not a countdown).
 **Every timeframe you view is tracked:** switching the dashboard to 15m/4h adds it to the
 scan+track set, so its signals are logged and outcome-checked too (not just the default).
 
-## Data sources (free, keyless) — multi-exchange
+## Data sources (free, keyless) - multi-exchange
 
 **Binance-only** by default (you trade on Binance): the universe is Binance's TRADING spot
 `USDT` pairs (from `exchangeInfo`). To survive geo-blocks it tries several Binance public
-hosts — **`data-api.binance.vision`** (the market-data mirror) first, then
+hosts - **`data-api.binance.vision`** (the market-data mirror) first, then
 `api.binance.com`, etc. Set `EXCHANGES=binance,bybit,okx` to allow Bybit/OKX as a fallback
 (still filtered to Binance-listed coins when the Binance list is reachable).
 
@@ -116,26 +116,26 @@ Only **very-high-conviction** signals (≥ `TRACK_MIN_CONFIDENCE`, default **95%
 **logged and then monitored every minute**: did price reach the entry zone, then TP1 / TP2 /
 TP3, or the stop? Lower-conviction setups still show on the Signals tab but are **not** tracked,
 so the record reflects only the trades you'd actually take. From that the app computes a live
-**track record** — win rate, TP1/2/3 hit rates, average R — shown on the dashboard, via
+**track record** - win rate, TP1/2/3 hit rates, average R - shown on the dashboard, via
 `GET /api/stats` and `GET /api/tracked`, and Telegram `/stats`.
 
 **Click any live/closed trade** for a **target ladder**: Entry → TP1 → TP2 → TP3, each step
 showing the **% move** (from entry and from the previous TP), its **R multiple**, the
-**estimated time** for that leg, the **actual** time once hit, and — while live — **how much
+**estimated time** for that leg, the **actual** time once hit, and - while live - **how much
 time is left** to the next target. So you know exactly how long to wait for each TP.
 
-- **Durable** when `DATABASE_URL` (Railway Postgres plugin) is set — history survives
+- **Durable** when `DATABASE_URL` (Railway Postgres plugin) is set - history survives
   restarts. Without it, tracking is in-memory and **resets on every redeploy** (a common
   reason the Track Record tab looks empty). The tab shows a banner explaining exactly why
-  it's empty — in-memory reset, no signal yet at/above `TRACK_MIN_CONFIDENCE`, or a ranging
-  market — and how many signals currently qualify.
+  it's empty - in-memory reset, no signal yet at/above `TRACK_MIN_CONFIDENCE`, or a ranging
+  market - and how many signals currently qualify.
 - A signal is a **WIN** if it reaches ≥ TP1 before the stop, **LOSS** if stopped first,
   **EXPIRED** if entry never fills or it times out (`MAX_WAIT_CANDLES` / `MAX_HOLD_CANDLES`).
 
 ## Auto-trade on Binance Spot **Testnet** (paper money)
 
 A **Settings** tab lets you paper-trade the high-conviction signals on Binance's spot
-**testnet** (`testnet.binance.vision`) — demo funds only, zero real risk:
+**testnet** (`testnet.binance.vision`) - demo funds only, zero real risk:
 
 1. Create a testnet account and **Generate HMAC_SHA256 key** at `testnet.binance.vision`.
 2. Open the app → **⚙️ Settings** → paste the **API key + secret**, set **$ per trade**
@@ -155,7 +155,7 @@ location"). If the scanner or Test connection reports that, set a **Proxy URL** 
 market-data scanner and the testnet trading calls.
 
 - **Format:** a full URL `http://user:pass@host:port`, **or** paste Webshare's raw download line
-  `host:port:user:pass` — it's converted automatically.
+  `host:port:user:pass` - it's converted automatically.
 - **Test proxies** (Settings → 🧪 Test proxies): paste all your proxies (one per line) and hit
   **Test all**. Each is checked against real Binance endpoints and shows ✅/❌ for market data,
   the testnet host, latency, and the exit country. Click **Use this** on a working one → Save.
@@ -166,22 +166,22 @@ market-data scanner and the testnet trading calls.
 Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `POST /api/proxy/test`,
 `GET /api/testnet/trades`.
 
-## Paper trading (built-in spot broker — no exchange, no keys, no proxy)
+## Paper trading (built-in spot broker - no exchange, no keys, no proxy)
 
 The **📝 Paper Trading** tab simulates a **real spot account**: a fixed pot of virtual cash
 (`CAPITAL_USD`, e.g. $200) that **buys good coins and rotates**. It runs **24/7** with nothing to
 configure and nothing to break: no Binance, no API keys, no proxy, no geo-block.
 
 **Goal-driven ranking (highest ROI in the least time):** every scan, all eligible setups are
-scored by **ROI-per-hour × accuracy** — `(% gain to TP1 ÷ hours to TP1) × (confidence/100)` — and
+scored by **ROI-per-hour × accuracy** - `(% gain to TP1 ÷ hours to TP1) × (confidence/100)` - and
 the account buys the **top-ranked** ones that free cash and open slots allow. A fast +4%-in-30-min
 setup outranks a slow +5%-in-10-hours one, so your capital compounds quickly toward the goal.
 
-How each trade works — exactly like a real spot account:
+How each trade works - exactly like a real spot account:
 
 1. A signal scores **≥95%** on a **good coin** (Blue-chip / Solid quality, liquid, market not
    risk-off) and is **still enterable** (not already run past its zone).
-2. It **buys** `PAPER_POSITION_USD` of the **best-ranked** one at the **real live price** — the tab
+2. It **buys** `PAPER_POSITION_USD` of the **best-ranked** one at the **real live price** - the tab
    shows the **$ size**, **coin quantity**, the **estimated TP1 profit**, and the **estimated TP1
    time in Sri Lanka time**.
 3. That cash is now **invested** (free cash drops). You can hold at most `PAPER_MAX_OPEN` coins.
@@ -191,13 +191,13 @@ How each trade works — exactly like a real spot account:
 
 **Daily goal + loss recovery:** the goal (`PAPER_GOAL_USD`, default **$10/day**) is a **daily
 target measured on net profit** and it **resets at SL midnight**. Trading does **not** stop when
-the goal is reached — it keeps compounding ("banking extra"). Losses are **netted in**: a $1
+the goal is reached - it keeps compounding ("banking extra"). Losses are **netted in**: a $1
 stop-loss raises the day's needed profit to $11, so the next good trades **cover the loss** before
 the day counts as green. The progress bar shows today's net, W-L, and how much is left (or the
 amount being recovered). Optionally cap **Max TP1 wait** (`PAPER_MAX_ETA_MIN`) to only take
 setups expected to hit TP1 within N minutes (0 = no cap).
 
-- **Long-only, no leverage** — spot can only buy, so P/L is the plain % move on the amount
+- **Long-only, no leverage** - spot can only buy, so P/L is the plain % move on the amount
   invested (a +3% winner on $20 = **+$0.60**). No liquidations.
 - **The account:** *Equity = free cash + live value of coins held*. *Growth* shows how the $200
   is doing; *Realized PnL* is banked profit; *Win rate* is your real edge.
@@ -206,32 +206,32 @@ setups expected to hit TP1 within N minutes (0 = no cap).
 - **Settings (in the tab):** starting **Capital $**, **$ / trade**, **Max open**. **Reset** any
   time to start the account fresh.
 
-It's **fake money** — for learning and proving the strategy before you risk anything real, and
+It's **fake money** - for learning and proving the strategy before you risk anything real, and
 the recommended way to see the signals auto-trade when Binance isn't available in your region.
 
 **Reward:risk (Exit target):** TP1 sits exactly **1R** above entry and the stop **1R** below, so
-exiting at TP1 is **1:1** (a win equals a loss in $, on spot) — mathematically correct, and the
+exiting at TP1 is **1:1** (a win equals a loss in $, on spot) - mathematically correct, and the
 highest hit-rate exit. To make wins bigger than losses, set **Exit at** to **TP2 (2:1)** or **TP3
-(3:1)** (`PAPER_TP_LEVEL`) — bigger reward per win, but the further target is hit less often.
+(3:1)** (`PAPER_TP_LEVEL`) - bigger reward per win, but the further target is hit less often.
 
 Endpoints: `GET /api/paper/trades`, `POST /api/paper/reset` (settings via `POST /api/settings`).
 
 ## Futures paper trading (leveraged, long + short)
 
-The **⚡ Futures Paper** tab is the **same engine** as spot — ROI/time/accuracy ranking, rotation,
-daily goal, loss recovery, TP-level R:R, estimated TP time in SL — but **leveraged** and it can go
+The **⚡ Futures Paper** tab is the **same engine** as spot - ROI/time/accuracy ranking, rotation,
+daily goal, loss recovery, TP-level R:R, estimated TP time in SL - but **leveraged** and it can go
 **short** as well as long:
 
 - **Sizing:** `FUTURES_MARGIN_USD` per trade × `FUTURES_LEVERAGE` (default 20x) = the **notional**.
   P/L is on the notional, so a +2% move at 20x on $10 margin = **+$4** (a −2% move = −$4). The loss
-  is **capped at the margin** — a big adverse move **liquidates** (~`100/leverage`% away), shown on
+  is **capped at the margin** - a big adverse move **liquidates** (~`100/leverage`% away), shown on
   every position and in the buy message.
 - **Long + short:** it takes the best setup in either direction (with the market regime), so it can
   profit in down markets too.
 - Same daily-goal, rotation and recovery behaviour as spot. Separate `futures_trades` table and
   starting balance (`FUTURES_CAPITAL_USD`).
 
-> Leverage cuts both ways — it's the fastest path to the daily goal **and** to a wiped margin. Use
+> Leverage cuts both ways - it's the fastest path to the daily goal **and** to a wiped margin. Use
 > the paper tab to learn how 20x really behaves before risking anything real.
 
 Endpoints: `GET /api/futures/trades`, `POST /api/futures/reset` (settings via `POST /api/settings`).
@@ -244,8 +244,8 @@ Turn on **Settings → "Ask me on Telegram before each trade"** and set your **$
 > 🟢 **LONG BTC/USDT** · 1-Hour
 > 🔥 Confidence **96%** · Blue-chip · RISK_ON
 > 🕐 fresh as of 01:45 SL · now $64,010
-> ✅ **ENTER NOW** — price is in the zone
-> 📍 **Entry Zone** $63,800 – $64,100
+> ✅ **ENTER NOW** - price is in the zone
+> 📍 **Entry Zone** $63,800 - $64,100
 > 🛑 **Stop Loss** $63,200 (-1.17%) → **-$4.68**
 > 🎯 **TP1** $64,750 (+1.25%) ~2h → **+$5** · TP2 → +$9.60 · TP3 → +$14.40
 > _(profit on $20 at 20x = $400 notional)_
@@ -253,7 +253,7 @@ Turn on **Settings → "Ask me on Telegram before each trade"** and set your **$
 > [📈 Open chart]  **Take this trade?**  [✅ Take $20 (20x)] [❌ Skip]
 
 The **$ profit/loss** are calculated on your position at your **leverage** (default 20x). Lower the
-leverage in Settings if that feels too aggressive — at 20x a ~5% adverse move is a liquidation.
+leverage in Settings if that feels too aggressive - at 20x a ~5% adverse move is a liquidation.
 
 Tap **Take** → it's tracked and you get **"🎯 TP1 hit! +$0.40 profit"** when it lands (and it
 closes at TP1, per the exit style). Tap **Skip** → nothing happens. First message your bot
@@ -265,17 +265,17 @@ deploy, then send your bot **/start**. The connection uses long-polling and **au
 > The chart is sent as a **TradingView link** (works everywhere). Rendered image screenshots need
 > a headless browser on the server - ask and I can add that.
 
-### You trade by hand — so only *fresh* signals are pushed
+### You trade by hand - so only *fresh* signals are pushed
 
 The website auto-trades the instant a signal fires; you can't. If a message reached you after the
-price had already run to TP1, entering then would be **buying the top** — the exact way to get
+price had already run to TP1, entering then would be **buying the top** - the exact way to get
 stuck and lose. So Telegram **never pushes a stale setup**:
 
-- Every alert/proposal is gated to an **enterable** window — `✅ ENTER NOW` (price is in the zone)
+- Every alert/proposal is gated to an **enterable** window - `✅ ENTER NOW` (price is in the zone)
   or `⏳ WAIT` (a pullback into the zone is coming, you have time). Anything the price already ran
   past (`CHASE`/missed, or TP1 already hit) is **dropped**, not sent.
 - Each card carries a **freshness stamp** (`🕐 fresh as of HH:MM SL`) and shows the entry as a
-  **ZONE (a range)**, not a single price — so a small move while you're reading it still leaves you
+  **ZONE (a range)**, not a single price - so a small move while you're reading it still leaves you
   a valid entry.
 
 ### Commands (built to look like the website)
@@ -289,7 +289,7 @@ stuck and lose. So Telegram **never pushes a stale setup**:
 | `/stats` | Track record (win rate, TP hit rates, avg R) |
 | `/help` | The command list |
 
-Timeframes read in words — `15-min`, `1-Hour`, `4-Hour`, `Daily`.
+Timeframes read in words - `15-min`, `1-Hour`, `4-Hour`, `Daily`.
 
 ## Forex Bot (OANDA v20) - full setup guide
 
@@ -353,7 +353,7 @@ change.
 ## Deploy to Railway (one service, no DB)
 
 1. Create a service from this repo (Dockerfile build; leave Root Directory empty).
-2. Optionally set the variables below. **Nothing is required** — it runs with defaults.
+2. Optionally set the variables below. **Nothing is required** - it runs with defaults.
 3. Deploy → Generate Domain → open it.
 
 ### Environment variables (all optional)
@@ -367,22 +367,22 @@ change.
 | `SIGNAL_MIN_CONFIDENCE` | `45` | Min % to emit LONG/SHORT (lower = more signals) |
 | `SCAN_INTERVAL_SEC` | `5` | Live auto-scan cadence in **seconds** (min 3). The whole market + open-trade monitor refresh on this tick; the UI polls at the same rate. Raise it if you hit exchange rate limits. |
 | `FALLBACK_USD_LKR` | `300` | FX fallback for LKR display |
-| `TELEGRAM_BOT_TOKEN` | – | Enables the Telegram bot (`/signals`, `/signal <SYM>`) |
-| `TELEGRAM_CHAT_ID` | – | Optional alert target; chats that message the bot auto-register |
+| `TELEGRAM_BOT_TOKEN` | - | Enables the Telegram bot (`/signals`, `/signal <SYM>`) |
+| `TELEGRAM_CHAT_ID` | - | Optional alert target; chats that message the bot auto-register |
 
 ## API
 
 - `GET /api/health`
 - `GET /api/config`
-- `GET /api/signals?tf=1h&only=actionable&dir=LONG&limit=20` — the market scan (cached ~60s)
-- `GET /api/signal/:symbol?tf=1h` — one coin, computed fresh
-- `POST /api/rescan?tf=1h` — force a fresh scan
-- `GET /api/candles/:symbol?tf=1h` — OHLC candles for the chart
-- `GET /api/backtest/:symbol?tf=1h&bars=1000` — replay the signal rules over history (see below)
-- `GET /api/stats` — track record (win rate, TP hit rates, avg R)
-- `GET /api/tracked` — open (live) + recently-resolved signals
+- `GET /api/signals?tf=1h&only=actionable&dir=LONG&limit=20` - the market scan (cached ~60s)
+- `GET /api/signal/:symbol?tf=1h` - one coin, computed fresh
+- `POST /api/rescan?tf=1h` - force a fresh scan
+- `GET /api/candles/:symbol?tf=1h` - OHLC candles for the chart
+- `GET /api/backtest/:symbol?tf=1h&bars=1000` - replay the signal rules over history (see below)
+- `GET /api/stats` - track record (win rate, TP hit rates, avg R)
+- `GET /api/tracked` - open (live) + recently-resolved signals
 
-## Backtest — did these rules actually work?
+## Backtest - did these rules actually work?
 
 Click **⏮ Test** on any signal card (or **⏮ Backtest** inside its chart, or call
 `GET /api/backtest/:symbol?tf=1h`) to **replay the exact signal rules over historical
@@ -396,7 +396,7 @@ counts the stop). You get:
 - Trade / entered / win / loss counts
 
 This is the *same* `computeSignal` logic the live scanner uses, so a good backtest is real
-evidence the setup has an edge on that pair — not a separate, prettier model.
+evidence the setup has an edge on that pair - not a separate, prettier model.
 
 ## Track Record tab
 
@@ -417,4 +417,4 @@ npm install
 npm start        # http://localhost:3000
 ```
 
-_Educational only — not financial advice. Always trade with your own stop and risk limits._
+_Educational only - not financial advice. Always trade with your own stop and risk limits._

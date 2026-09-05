@@ -1,10 +1,10 @@
-# ExnessAutoTrader — MetaTrader 5 auto-trading bot
+# ExnessAutoTrader - MetaTrader 5 auto-trading bot
 
 An Expert Advisor (EA) that auto-trades forex on your **Exness MT5 demo** using the same
 logic as the Crypto Signal Engine: **EMA crossover + RSI filter + higher-timeframe trend +
 ATR stops**, sized so each stop-out loses about **$10**, up to **5 positions at once**.
 
-> ⚠️ **Read this first.** In MetaTrader, *indicators cannot place trades* — only **Expert
+> ⚠️ **Read this first.** In MetaTrader, *indicators cannot place trades* - only **Expert
 > Advisors** can. That's what this is. Keep it on the **DEMO account** until you've watched it
 > for weeks. No strategy wins every trade; this is a mechanical tool, not a promise of profit.
 > $10 risk × 5 open trades = up to **$50 at risk** at any moment.
@@ -14,15 +14,15 @@ ATR stops**, sized so each stop-out loses about **$10**, up to **5 positions at 
 For each pair, on every newly **closed** candle of the trading timeframe (default M15):
 
 1. **Trend filter (H1):** price must be above the H1 EMA(50) for longs, below it for shorts.
-   *Don't fight the higher timeframe* — this is the single biggest accuracy win.
-2. **Entry trigger:** the fast EMA(20) **crosses** the slow EMA(50) — up for a long, down for a short.
+   *Don't fight the higher timeframe* - this is the single biggest accuracy win.
+2. **Entry trigger:** the fast EMA(20) **crosses** the slow EMA(50) - up for a long, down for a short.
 3. **Momentum filter:** RSI(14) above 50 for longs, below 50 for shorts.
 4. **Stop-loss:** ATR(14) × 1.5 away from entry (adapts to each pair's volatility).
 5. **Take-profit:** ATR(14) × 2.0 (reward ≈ 1.33× the risk).
 6. **Position size:** calculated so that if the stop is hit you lose ≈ **$10** (your setting).
 7. **Limits:** max **5** open positions total, **one per pair**, spread must be reasonable.
 
-The broker's SL/TP close the trade automatically — you don't need the terminal focused.
+The broker's SL/TP close the trade automatically - you don't need the terminal focused.
 
 ## Install (5 minutes)
 
@@ -42,7 +42,7 @@ The broker's SL/TP close the trade automatically — you don't need the terminal
 9. A **smiley face 🙂** in the top-right corner of the chart = the bot is running.
    ☹️ or an "×" = algo trading is off or something is wrong (check the **Experts** log tab).
 
-You attach it to **one** chart only — it scans the whole symbol list itself from there.
+You attach it to **one** chart only - it scans the whole symbol list itself from there.
 
 ## Key settings (Inputs tab)
 
@@ -65,12 +65,12 @@ at the real names. If they're `EURUSDm`, `GBPUSDm`, … then either:
 - set **`InpSymbolSuffix = m`**, or
 - type the full names into `InpSymbols` (e.g. `EURUSDm,GBPUSDm,...`).
 
-If a pair isn't found it's skipped and logged in the **Experts** tab — no crash.
+If a pair isn't found it's skipped and logged in the **Experts** tab - no crash.
 
 ## Grow the account safely
 
 - Start with `InpRiskUsd = 10` fixed. Once you trust it, switch on `InpUsePercentRisk`
-  (e.g. `1.0`%) so trade size **grows with your balance** and shrinks after a drawdown — that's
+  (e.g. `1.0`%) so trade size **grows with your balance** and shrinks after a drawdown - that's
   how a small account compounds without blowing up.
 - **Backtest before live-ish demo runs:** MT5 **View → Strategy Tester (Ctrl+R)**, pick this EA,
   a pair, "Every tick", a few months of history, and watch the equity curve and drawdown.
@@ -79,7 +79,7 @@ If a pair isn't found it's skipped and logged in the **Experts** tab — no cras
 
 ## Troubleshooting
 
-- **No trades ever:** it only enters on a fresh EMA cross *with* trend + RSI agreeing — that's
+- **No trades ever:** it only enters on a fresh EMA cross *with* trend + RSI agreeing - that's
   intentionally selective. Try more pairs, or a lower timeframe, or run the Strategy Tester to
   confirm it fires.
 - **"not enough free margin" / min-lot:** on some pairs the minimum lot risks more than $10;

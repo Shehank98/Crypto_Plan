@@ -374,8 +374,8 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   // Plain-English rationale for each drawn level (shown on the chart's "why" panel).
   const riskPct = round((risk / entryMid) * 100, 2);
   const entryWhy = long
-    ? `Buy the pullback into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer - a tighter, higher-reward entry.`
-    : `Sell the bounce into the EMA20/VWAP zone (${rp(entryLow)}–${rp(entryHigh)}) instead of shorting the low. The trend is down, so a pop gives a better price with the stop closer.`;
+    ? `Buy the pullback into the EMA20/VWAP zone (${rp(entryLow)}-${rp(entryHigh)}) instead of chasing price. The trend is up, so a dip gives a better price with the stop closer - a tighter, higher-reward entry.`
+    : `Sell the bounce into the EMA20/VWAP zone (${rp(entryLow)}-${rp(entryHigh)}) instead of shorting the low. The trend is down, so a pop gives a better price with the stop closer.`;
   const stopWhy = long
     ? `Set below the recent 20-bar swing low, minus 1×ATR (ATR≈${rp(a)}). A close under here breaks the higher-low structure - the uptrend idea is wrong, so exit.`
     : `Set above the recent 20-bar swing high, plus 1×ATR (ATR≈${rp(a)}). A close over here breaks the lower-high structure - the downtrend idea is wrong, so exit.`;
@@ -880,8 +880,8 @@ let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
 function maskKey(k) { return k ? k.slice(0, 4) + "…" + k.slice(-4) : ""; }
 // Accept a proxy in EITHER form and return a proper URL string:
-//   - full URL:            http://user:pass@host:port
-//   - Webshare download:   host:port:user:pass   (or host:port)
+// - full URL:            http://user:pass@host:port
+// - Webshare download:   host:port:user:pass   (or host:port)
 // This lets you paste Webshare's raw line straight in without converting it.
 function normalizeProxy(raw) {
   if (!raw) return "";
@@ -910,8 +910,8 @@ function niceTnError(e) {
   const msg = e.response?.data?.msg || e.message || "request failed";
   if (/restricted location|Eligibility|restricted/i.test(msg)) return "Binance is geo-blocking this server's region. Add a Proxy URL (Settings) that exits in an allowed region, or host the app in an allowed region.";
   if (code === -2015 || /Invalid API-key, IP, or permissions/i.test(msg))
-    return "Binance rejected the credentials (-2015). Fix, in order: (1) regenerate a fresh HMAC key at testnet.binance.vision — testnet resets periodically and kills old keys; (2) re-paste BOTH the key AND the secret (a wrong secret looks like this); (3) create the key UNRESTRICTED (no IP whitelist), since requests exit via the proxy IP — or turn OFF 'route testnet through proxy' to send it direct.";
-  if (code === -1022 || /Signature for this request/i.test(msg)) return "Signature rejected (-1022). The secret doesn't match the key — re-paste both.";
+    return "Binance rejected the credentials (-2015). Fix, in order: (1) regenerate a fresh HMAC key at testnet.binance.vision - testnet resets periodically and kills old keys; (2) re-paste BOTH the key AND the secret (a wrong secret looks like this); (3) create the key UNRESTRICTED (no IP whitelist), since requests exit via the proxy IP - or turn OFF 'route testnet through proxy' to send it direct.";
+  if (code === -1022 || /Signature for this request/i.test(msg)) return "Signature rejected (-1022). The secret doesn't match the key - re-paste both.";
   if (code === -1021 || /Timestamp for this request/i.test(msg)) return "Clock out of sync (-1021). The server time drifted; retry, and if it persists the host clock needs NTP.";
   return msg;
 }
@@ -1071,7 +1071,7 @@ function slClock(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().sli
 function fmtPaperBuy(o) {
   const isF = o.kind === "futures";
   const dot = o.direction === "SHORT" ? "🔴" : "🟢";
-  const head = isF ? `${dot} *FUTURES ${o.direction} — ${o.symbol}*  ${o.leverage}x` : `🟢 *PAPER BUY — ${o.symbol}*`;
+  const head = isF ? `${dot} *FUTURES ${o.direction} - ${o.symbol}*  ${o.leverage}x` : `🟢 *PAPER BUY - ${o.symbol}*`;
   const sub = isF ? `💎 ${o.quality} | ${o.alloc}% margin used | R:R ${o.rr}:1 | ${o.confidence}%`
                   : `💎 ${o.quality} Setup | ${o.alloc}% Allocation | R:R ${o.rr}:1`;
   const capLine = isF ? `💵 Margin: *$${o.cost}* → Notional *$${o.notional}* (${o.leverage}x)` : `💵 Capital: *$${o.cost}*`;
@@ -1095,10 +1095,10 @@ function fmtPaperSell(o) {
   let dayLine = "";
   if (d) {
     if (d.reached) dayLine = `🏆 *Daily goal reached!* Today: ${sd(d.net)} (target $${d.target}). Banking extra on top.\n`;
-    else if (d.net < 0) dayLine = `🔻 *Recovering:* today ${sd(d.net)} — need *+$${round(d.remaining, 2)}* more to hit the $${d.target} goal. Hunting a good setup to cover it.\n`;
-    else dayLine = `📅 *Today:* ${sd(d.net)} / $${d.target} goal — *+$${round(d.remaining, 2)}* to go.${o.win ? "" : d.lossToRecover > 0 ? ` (covering -$${d.lossToRecover})` : ""}\n`;
+    else if (d.net < 0) dayLine = `🔻 *Recovering:* today ${sd(d.net)} - need *+$${round(d.remaining, 2)}* more to hit the $${d.target} goal. Hunting a good setup to cover it.\n`;
+    else dayLine = `📅 *Today:* ${sd(d.net)} / $${d.target} goal - *+$${round(d.remaining, 2)}* to go.${o.win ? "" : d.lossToRecover > 0 ? ` (covering -$${d.lossToRecover})` : ""}\n`;
   }
-  const head = isF ? `${o.win ? "🎯" : "🛑"} *FUTURES ${o.direction} ${o.symbol} — CLOSED*` : `${o.win ? "🎯" : "🛑"} *PAPER SELL — ${o.symbol}*`;
+  const head = isF ? `${o.win ? "🎯" : "🛑"} *FUTURES ${o.direction} ${o.symbol} - CLOSED*` : `${o.win ? "🎯" : "🛑"} *PAPER SELL - ${o.symbol}*`;
   return `${head}\n`
     + `${o.win ? `✅ TP${o.tpLevel || 1} HIT | Win` : "❌ STOP LOSS | Loss"}\n\n`
     + `💵 ${isF ? "Margin" : "Bought"}: $${o.cost}${isF ? ` (${o.leverage}x)` : ""} @ ${fmtUsd(o.entry)}\n`
@@ -1577,12 +1577,12 @@ const proposedAt = new Map(); // cooldown per key
 const PROPOSE_COOLDOWN = 3 * 3600_000;
 const TF_LABEL = { "15m": "15-min", "1h": "1-Hour", "4h": "4-Hour", "1d": "Daily" };
 function slNow() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
-const WIN_LINE = { OPEN: "✅ *ENTER NOW* — price is in the zone", WAIT: "⏳ Wait for a pullback into the zone", CHASE: "⚠️ Extended — only on a small pullback", CLOSED: "⛔ Missed — wait for the next setup" };
+const WIN_LINE = { OPEN: "✅ *ENTER NOW* - price is in the zone", WAIT: "⏳ Wait for a pullback into the zone", CHASE: "⚠️ Extended - only on a small pullback", CLOSED: "⛔ Missed - wait for the next setup" };
 // Shared, consistent footer + disclaimers so every message reads the same way.
 const TG_FOOTER = "📊 _Trade smart. Manage risk. Follow the system._";
 const DISC_PAPER = "⚠️ _Paper trade for demonstration purposes. Crypto markets are volatile; no profit is guaranteed._";
-const DISC_SIGNAL = "⚠️ _Not financial advice. Crypto markets are volatile — manage your risk._";
-const DISC_FUTURES = "⚠️ _Paper futures for demonstration. Leverage multiplies losses as well as gains — a small adverse move can liquidate the position. No profit is guaranteed._";
+const DISC_SIGNAL = "⚠️ _Not financial advice. Crypto markets are volatile - manage your risk._";
+const DISC_FUTURES = "⚠️ _Paper futures for demonstration. Leverage multiplies losses as well as gains - a small adverse move can liquidate the position. No profit is guaranteed._";
 // A clean, structured signal card for Telegram, with leverage profit/loss projections.
 function fmtSignalCard(s) {
   const long = s.direction === "LONG";
@@ -1592,11 +1592,11 @@ function fmtSignalCard(s) {
   const tvLink = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}${QUOTE}`;
   const tps = s.targets.map((t, i) => ` ${i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} TP${i + 1}  ${fmtUsd(t.priceUsd)}  (+${t.gainPct}%)  ~${t.etaLabel} → *+$${proj(t.gainPct)}*`).join("\n");
   const liqPct = round(100 / lev, 1);
-  return `${dot} *${s.direction} SIGNAL — ${s.symbol}/${QUOTE}*\n`
+  return `${dot} *${s.direction} SIGNAL - ${s.symbol}/${QUOTE}*\n`
     + `💎 ${s.quality?.tier || "-"} | ${TF_LABEL[s.tf] || s.tf} | ${s.confidence}%  ·  ${marketRegime.tier}\n`
     + `🕐 Fresh as of ${slNow()} · now ${fmtUsd(s.priceUsd)}\n`
     + `${(WIN_LINE[s.entry.window] || "")}\n\n`
-    + `📍 *ENTRY ZONE:* ${fmtUsd(s.entry.low)} – ${fmtUsd(s.entry.high)}\n\n`
+    + `📍 *ENTRY ZONE:* ${fmtUsd(s.entry.low)} - ${fmtUsd(s.entry.high)}\n\n`
     + `🎯 *TAKE PROFIT*  _(on $${pos} at ${lev}x = $${notional})_\n${tps}\n\n`
     + `🛑 *STOP LOSS:* ${fmtUsd(s.stop.priceUsd)}\n`
     + `📉 Risk: -${s.stop.riskPct}% → *-$${proj(s.stop.riskPct)}*\n\n`
@@ -1611,7 +1611,7 @@ function fmtSignalRow(s) {
   const win = s.entry.window === "OPEN" ? "✅ now" : s.entry.window === "WAIT" ? "⏳ wait" : s.entry.window === "CHASE" ? "⚠️ extended" : "⛔ missed";
   const prof = round((settings.positionUsd * Math.max(1, settings.leverage) * s.targets[0].gainPct) / 100, 2);
   return `${dot} *${s.symbol}* ${s.direction} · ${s.confidence}% · ${win}\n`
-    + `   ${TF_LABEL[s.tf] || s.tf} · Entry ${fmtUsd(s.entry.low)}–${fmtUsd(s.entry.high)} · TP1 *+$${prof}* · /signal ${s.symbol}`;
+    + `   ${TF_LABEL[s.tf] || s.tf} · Entry ${fmtUsd(s.entry.low)}-${fmtUsd(s.entry.high)} · TP1 *+$${prof}* · /signal ${s.symbol}`;
 }
 // The command timeframe (changed with /tf). Starts at the engine's main timeframe.
 let cmdTf = SIGNAL_TF;
@@ -1627,14 +1627,14 @@ async function tgSignals(tf, { freshOnly = false, minConf = TRACK_MIN_CONFIDENCE
     return s.entry.window === "OPEN" || s.entry.window === "WAIT";
   }).slice(0, limit);
 }
-const TG_HELP = "📡 *Signal Engine — commands*\n\n"
-  + "/signals – top high-accuracy setups you can still enter\n"
-  + "/fresh – only the ones to *enter right now*\n"
-  + "/signal `SYMBOL` – full card for one coin (e.g. /signal BTC)\n"
-  + "/tf `15m|1h|4h|1d` – change the timeframe (now: " + "%TF%" + ")\n"
-  + "/stats – track record (win rate)\n"
-  + "/help – this list\n\n"
-  + "_Only ≥95% setups reach here — the same bar as the Track Record. Every card shows the entry ZONE (a range), so a small move while you read it still lets you get in._";
+const TG_HELP = "📡 *Signal Engine - commands*\n\n"
+  + "/signals - top high-accuracy setups you can still enter\n"
+  + "/fresh - only the ones to *enter right now*\n"
+  + "/signal `SYMBOL` - full card for one coin (e.g. /signal BTC)\n"
+  + "/tf `15m|1h|4h|1d` - change the timeframe (now: " + "%TF%" + ")\n"
+  + "/stats - track record (win rate)\n"
+  + "/help - this list\n\n"
+  + "_Only ≥95% setups reach here - the same bar as the Track Record. Every card shows the entry ZONE (a range), so a small move while you read it still lets you get in._";
 async function proposeTrade(s) {
   if (!settings.tgApproval || !bot || chats.size === 0) return;
   if (s.direction !== "LONG" && s.direction !== "SHORT") return;
@@ -1659,7 +1659,7 @@ async function maybeAlertTp1(row, upd) {
   if (!a || a.alerted) return;
   if (!(upd.tp1_hit || upd.status === "WIN")) return;
   a.alerted = true;
-  const msg = `🎯 *TP1 HIT — ${row.symbol}*\n`
+  const msg = `🎯 *TP1 HIT - ${row.symbol}*\n`
     + `✅ Target reached | Win\n\n`
     + `🪙 Entry: ${fmtUsd(row.entry_mid)}\n`
     + `💰 TP1: ${fmtUsd(row.tp1)} (+${a.gain1}%)\n`
@@ -1684,7 +1684,7 @@ function startTelegram() {
           // Approval IS the go-ahead: place the testnet buy if keys are set (even if auto-trade is off).
           if (tnConfigured()) { const scan = scanCache[plan.tf]?.data; const sig = scan?.signals.find((x) => x.symbol === plan.symbol && x.direction === plan.direction); if (sig && sig.direction === "LONG") { const savedAuto = settings.autoTrade; settings.autoTrade = true; await maybeAutoTrade(sig).catch(() => {}); settings.autoTrade = savedAuto; } }
           await bot.answerCallbackQuery(cq.id, { text: "Taking the trade ✅" }).catch(() => {});
-          await bot.editMessageText(cq.message.text + `\n\n✅ TAKEN — I'll message you when TP1 hits (+$${plan.profit}).`, { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {});
+          await bot.editMessageText(cq.message.text + `\n\n✅ TAKEN - I'll message you when TP1 hits (+$${plan.profit}).`, { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {});
         } else if (action === "skip") {
           proposals.delete(key);
           await bot.answerCallbackQuery(cq.id, { text: "Skipped" }).catch(() => {});
@@ -1698,7 +1698,7 @@ function startTelegram() {
       chats.add(String(m.chat.id)); saveChats();
       bot.sendMessage(m.chat.id, `✅ *Linked!* This chat will now get signals 24/7.\nYour chat id: \`${m.chat.id}\`  (save it as TELEGRAM_CHAT_ID so it survives redeploys)\n\n` + help(), { parse_mode: "Markdown" });
     });
-    // /signals — compact, website-style list of setups you can still enter (OPEN + WAIT).
+    // /signals - compact, website-style list of setups you can still enter (OPEN + WAIT).
     bot.onText(/^\/signals\b/, async (m) => {
       try {
         const top = await tgSignals(cmdTf);
@@ -1706,18 +1706,18 @@ function startTelegram() {
           ? `📡 *Signals* · ${TF_LABEL[cmdTf] || cmdTf} · ${slNow()}\n_≥95% only · ✅ now / ⏳ wait for pullback_\n\n` + top.map(fmtSignalRow).join("\n\n") + `\n\n_Tap /signal SYMBOL for the full card._`
           : `No high-accuracy ${TF_LABEL[cmdTf] || cmdTf} setups you can enter right now. Try /tf 1h or check back soon.`;
         bot.sendMessage(m.chat.id, body, { parse_mode: "Markdown", disable_web_page_preview: true });
-      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't scan just now — try again in a moment."); }
+      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't scan just now - try again in a moment."); }
     });
-    // /fresh — only the ones to ENTER RIGHT NOW, as full cards (freshness-first).
+    // /fresh - only the ones to ENTER RIGHT NOW, as full cards (freshness-first).
     bot.onText(/^\/fresh\b/, async (m) => {
       try {
         const top = await tgSignals(cmdTf, { freshOnly: true, limit: 4 });
         if (!top.length) return bot.sendMessage(m.chat.id, `Nothing to enter *right now* on ${TF_LABEL[cmdTf] || cmdTf}. When a signal is in its zone I'll list it here (and message you if approvals are on).`, { parse_mode: "Markdown" });
         bot.sendMessage(m.chat.id, `⚡ *Enter-now setups* · ${slNow()}`, { parse_mode: "Markdown" });
         for (const s of top) await bot.sendMessage(m.chat.id, fmtSignalCard(s), { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {});
-      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't scan just now — try again in a moment."); }
+      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't scan just now - try again in a moment."); }
     });
-    // /signal SYMBOL — full card for one coin (any confidence, so you can look one up).
+    // /signal SYMBOL - full card for one coin (any confidence, so you can look one up).
     // (Plural /signals is handled above; this only matches "/signal" then an optional symbol.)
     bot.onText(/^\/signal(?:@\w+)?(?:\s+(\S+))?\s*$/, async (m, mt) => {
       try {
@@ -1727,9 +1727,9 @@ function startTelegram() {
         const s = signals.find((x) => (x.base || x.symbol) === base || x.symbol === base);
         if (!s || s.error || !s.entry || !s.targets) return bot.sendMessage(m.chat.id, `No ${base} setup on ${TF_LABEL[cmdTf] || cmdTf} right now (it may not be in the scanned universe, or it's NEUTRAL).`);
         bot.sendMessage(m.chat.id, fmtSignalCard(s), { parse_mode: "Markdown", disable_web_page_preview: true });
-      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't fetch that one — try again in a moment."); }
+      } catch (e) { bot.sendMessage(m.chat.id, "Couldn't fetch that one - try again in a moment."); }
     });
-    // /tf 1h — change the timeframe used by the commands above.
+    // /tf 1h - change the timeframe used by the commands above.
     bot.onText(/^\/tf(?:\s+(\S+))?/, (m, mt) => {
       const want = (mt[1] || "").toLowerCase();
       if (!want) return bot.sendMessage(m.chat.id, `Timeframe is *${TF_LABEL[cmdTf] || cmdTf}*. Change it: /tf 15m · /tf 1h · /tf 4h · /tf 1d`, { parse_mode: "Markdown" });
