@@ -1241,7 +1241,10 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
     const mktValue = P != null ? (Number(t.qty) || 0) * P : null;            // what the holding is worth now
     const uPnl = mktValue != null ? mktValue - (Number(t.cost_usd) || 0) : null;
     const movePct = P != null ? (P - t.entry_price) / t.entry_price * 100 : null;
-    return { ...t, livePrice: P ?? null, marketValueUsd: mktValue == null ? null : round(mktValue, 2), unrealizedUsd: uPnl == null ? null : round(uPnl, 2), unrealizedPct: movePct == null ? null : round(movePct, 2) };
+    // Estimated profit if this position reaches TP1 (spot: % move x amount invested).
+    const tp1Pct = (t.tp1 - t.entry_price) / t.entry_price * 100;
+    const tp1ProfitUsd = round((Number(t.cost_usd) || 0) * tp1Pct / 100, 2);
+    return { ...t, livePrice: P ?? null, marketValueUsd: mktValue == null ? null : round(mktValue, 2), unrealizedUsd: uPnl == null ? null : round(uPnl, 2), unrealizedPct: movePct == null ? null : round(movePct, 2), tp1Pct: round(tp1Pct, 2), tp1ProfitUsd };
   });
   const closed = rows.filter((t) => t.status === "WIN" || t.status === "LOSS");
   const a = await paperAccount();
