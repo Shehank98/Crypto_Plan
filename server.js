@@ -1159,7 +1159,8 @@ function fmtPaperBuy(o) {
   const capLine = isF ? `💵 Margin: *$${o.cost}* → Notional *$${o.notional}* (${o.leverage}x)` : `💵 Capital: *$${o.cost}*`;
   return `${head}\n${sub}\n\n`
     + `${capLine}\n`
-    + `🪙 Entry: ${o.qty} ${o.symbol} @ ${fmtUsd(o.entry)}\n\n`
+    + `🪙 Entry: ${o.qty} ${o.symbol} @ ${fmtUsd(o.entry)}\n`
+    + `🕒 Opened: *${o.openedSL}*\n\n`
     + `🎯 *TAKE PROFIT (TP${o.tpLevel}):* ${fmtUsd(o.tp1)}\n`
     + `📈 Target: +${o.gainPct}% → *+$${o.proj}*\n\n`
     + `🛑 *STOP LOSS:* ${fmtUsd(o.stop)}\n`
@@ -1181,8 +1182,12 @@ function fmtPaperSell(o) {
     else dayLine = `📅 *Today:* ${sd(d.net)} / $${d.target} goal - *+$${round(d.remaining, 2)}* to go.${o.win ? "" : d.lossToRecover > 0 ? ` (covering -$${d.lossToRecover})` : ""}\n`;
   }
   const head = isF ? `${o.win ? "🎯" : "🛑"} *FUTURES ${o.direction} ${o.symbol} - CLOSED*` : `${o.win ? "🎯" : "🛑"} *PAPER SELL - ${o.symbol}*`;
+  const outcome = o.reason === "TP" || o.reason === "TP1" ? `✅ TP${o.tpLevel || 1} HIT | Win`
+    : o.reason === "LIQ" ? "💥 LIQUIDATED | Loss"
+    : o.reason === "TIME" ? `⌛ TIME EXIT | ${o.win ? "Win" : "Loss"}`
+    : "❌ STOP LOSS | Loss";
   return `${head}\n`
-    + `${o.win ? `✅ TP${o.tpLevel || 1} HIT | Win` : "❌ STOP LOSS | Loss"}\n\n`
+    + `${outcome}\n\n`
     + `💵 ${isF ? "Margin" : "Bought"}: $${o.cost}${isF ? ` (${o.leverage}x)` : ""} @ ${fmtUsd(o.entry)}\n`
     + `${o.win ? "💰" : "💸"} ${isF ? "Exit" : "Sold"}: ${fmtUsd(o.exit)}  (${o.movePct >= 0 ? "+" : ""}${o.movePct}%)\n`
     + `${o.win ? "📈 Profit" : "📉 Loss"}: *${sd(o.pnl)}*${isF && o.pnlPct != null ? ` (${o.pnlPct >= 0 ? "+" : ""}${o.pnlPct}% on margin)` : ""}\n\n`
@@ -1228,6 +1233,7 @@ async function fillPaper(signals) {
     const acct = await paperAccount();
     if (acct.cash < 1) break;                                                // no cash to deploy
     if (await pstore.hasOpen(s0.symbol)) continue;                           // already holding it
+    if (reentryBlocked("spot", s0.symbol)) continue;                         // cooling off after a recent loss on this coin
     const P = prices.get(s0.symbol);
     if (P == null) continue;
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
@@ -1269,6 +1275,12 @@ function riskBasedCost({ equity, cashAvail, stopRiskPct, confidence, leverage = 
 }
 function dailyHalted(dailyNet, capital) { return settings.maxDailyLossPct > 0 && dailyNet <= -(capital * settings.maxDailyLossPct / 100); }
 function sameDirCount(openRows, direction) { return openRows.filter((t) => t.direction === direction).length; }
+// Post-loss re-entry cooldown: after a symbol stops out (or times out at a loss),
+// don't immediately buy it back into the same chop - wait one candle. Prevents the
+// classic whipsaw churn where the book keeps re-entering a coin that's grinding down.
+const reentryBlock = new Map();                                              // "book|SYMBOL" -> unblock timestamp (ms)
+function blockReentry(book, symbol, tfMin) { reentryBlock.set(`${book}|${symbol}`, Date.now() + Math.max(30, tfMin || 60) * 60000); }
+function reentryBlocked(book, symbol) { const u = reentryBlock.get(`${book}|${symbol}`); if (!u) return false; if (Date.now() >= u) { reentryBlock.delete(`${book}|${symbol}`); return false; } return true; }
 // Buy one qualifying signal for `cost` dollars. (Ranking/eligibility done by fillPaper.)
 async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
@@ -1288,7 +1300,7 @@ async function openPaper(s, cost) {
   console.log(`[paper] BUY ${s.symbol} $${round(cost, 2)} @ ${entry} TP${idx + 1} ${tp1} stop ${stop} (R:R ${rr})`);
   await tgBroadcast(fmtPaperBuy({
     kind: "spot", symbol: s.symbol, quality: s.quality.tier, confidence: s.confidence, alloc, rr, cost: round(cost, 2), qty: Number(qty.toPrecision(5)),
-    entry, tp1, tpLevel: idx + 1, gainPct: g1, proj, stop, riskPct, loss,
+    entry, tp1, tpLevel: idx + 1, gainPct: g1, proj, stop, riskPct, loss, openedSL: slClock(Date.now()),
     etaSL: eta1 != null ? slClock(Date.now() + eta1 * 60000) : null, etaLabel: tgt.etaLabel,
   }));
   return id;
@@ -1297,22 +1309,34 @@ async function openPaper(s, cost) {
 // amount invested. Freed cash is redeployed by the next scan (rotation).
 async function managePaper(prices) {
   let open; try { open = await pstore.openTrades(); } catch (e) { return; }
+  const now = Date.now();
   for (const t of open) {
     const P = prices.get(t.symbol);
     if (P == null) continue;
     const hitTp = P >= t.tp1, hitStop = P <= t.stop;
-    if (!hitTp && !hitStop) continue;
-    const exit = hitTp ? t.tp1 : t.stop;
+    // Time stop: a trade that never reaches TP or stop still frees its capital after
+    // MAX_HOLD candles, so the book can rotate into a live setup instead of sitting
+    // in a dead one. It closes at the live price (whatever the P/L is at that point).
+    const tfMin = TF_MINUTES[t.tf] || 60;
+    const heldMin = t.opened_at ? (now - new Date(t.opened_at).getTime()) / 60000 : 0;
+    const timeUp = heldMin > MAX_HOLD_CANDLES * tfMin;
+    if (!hitTp && !hitStop && !timeUp) continue;
+    // Fills: TP exits at the limit (conservative). A stop that GAPPED through fills at
+    // the live price (worse), never better than the market - so losses are never
+    // understated. A time exit closes at the live price.
+    const exit = hitTp ? t.tp1 : hitStop ? Math.min(t.stop, P) : rp(P);
+    const reason = hitTp ? "TP1" : hitStop ? "STOP" : "TIME";
     const movePct = (exit - t.entry_price) / t.entry_price * 100;            // spot, long-only
     const gross = (Number(t.cost_usd) || 0) * movePct / 100;                 // gross profit on the $ invested
     const pnl = netAfterCosts(gross, Number(t.cost_usd) || 0, "spot");       // net of fees + slippage
-    const status = hitTp ? "WIN" : "LOSS";
-    await pstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP1" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: round(movePct, 2), closed_at: new Date() });
+    const status = pnl >= 0 ? "WIN" : "LOSS";
+    if (pnl < 0) blockReentry("spot", t.symbol, tfMin);                      // don't buy it straight back into the chop
+    await pstore.close(t.id, { status, exit_price: rp(exit), exit_reason: reason, pnl_usd: round(pnl, 2), pnl_pct: round(movePct, 2), closed_at: new Date() });
     const acct = await paperAccount();
     console.log(`[paper] SELL ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash} (equity building)`);
     const day = await paperDaily();
     await tgBroadcast(fmtPaperSell({
-      kind: "spot", symbol: t.symbol, win: hitTp, tpLevel: t.tp_level || 1, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2),
+      kind: "spot", symbol: t.symbol, win: pnl >= 0, reason, tpLevel: t.tp_level || 1, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2),
       pnl: round(pnl, 2), balance: round(settings.capitalUsd + acct.realized, 2), realized: acct.realized, day,
     }));
   }
@@ -1384,6 +1408,7 @@ async function fillFutures(signals) {
     const open = await fstore.openTrades();
     if (sameDirCount(open, s0.direction) >= settings.maxSameDir) continue;   // correlation cap per direction
     if (await fstore.hasOpen(s0.symbol)) continue;
+    if (reentryBlocked("futures", s0.symbol)) continue;                      // cooling off after a recent loss on this coin
     const P = prices.get(s0.symbol);
     if (P == null) continue;
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
@@ -1417,32 +1442,45 @@ async function openFutures(s, margin) {
   console.log(`[futures] ${s.direction} ${s.symbol} margin $${round(margin, 2)} ${lev}x notional $${notional} TP${idx + 1} ${tp1} stop ${stop} (R:R ${rr})`);
   await tgBroadcast(fmtPaperBuy({
     kind: "futures", symbol: s.symbol, direction: s.direction, leverage: lev, quality: s.quality.tier, confidence: s.confidence, alloc, rr,
-    cost: round(margin, 2), notional, qty: Number(qty.toPrecision(5)), entry, tp1, tpLevel: idx + 1, gainPct: g1, proj, stop, riskPct, loss,
+    cost: round(margin, 2), notional, qty: Number(qty.toPrecision(5)), entry, tp1, tpLevel: idx + 1, gainPct: g1, proj, stop, riskPct, loss, openedSL: slClock(Date.now()),
     liq: rp(liq), liqPct, etaSL: eta1 != null ? slClock(Date.now() + eta1 * 60000) : null, etaLabel: tgt.etaLabel,
   }));
   return id;
 }
 async function manageFutures(prices) {
   let open; try { open = await fstore.openTrades(); } catch (e) { return; }
+  const now = Date.now();
   for (const t of open) {
     const P = prices.get(t.symbol);
     if (P == null) continue;
     const long = t.direction === "LONG";
     const hitTp = long ? P >= t.tp1 : P <= t.tp1;
     const hitStop = long ? P <= t.stop : P >= t.stop;
-    if (!hitTp && !hitStop) continue;
-    const exit = hitTp ? t.tp1 : t.stop;
+    // Liquidation: if price hits the liq level the whole margin is gone (checked
+    // before the stop, since a leveraged stop can sit beyond liquidation).
+    const liq = long ? t.entry_price * (1 - 1 / Math.max(1, t.leverage)) : t.entry_price * (1 + 1 / Math.max(1, t.leverage));
+    const liquidated = long ? P <= liq : P >= liq;
+    // Time stop: free the margin after MAX_HOLD candles so it can rotate.
+    const tfMin = TF_MINUTES[t.tf] || 60;
+    const heldMin = t.opened_at ? (now - new Date(t.opened_at).getTime()) / 60000 : 0;
+    const timeUp = heldMin > MAX_HOLD_CANDLES * tfMin;
+    if (!hitTp && !hitStop && !liquidated && !timeUp) continue;
+    // Fills: TP at the limit; a stop that gapped through fills at the live price
+    // (worse), never better; liquidation = margin gone; time exit at the live price.
+    const exit = hitTp ? t.tp1 : liquidated ? rp(liq) : hitStop ? (long ? Math.min(t.stop, P) : Math.max(t.stop, P)) : rp(P);
+    const reason = hitTp ? "TP" : liquidated ? "LIQ" : hitStop ? "STOP" : "TIME";
     const movePct = (long ? (exit - t.entry_price) : (t.entry_price - exit)) / t.entry_price * 100;
     let pnl = netAfterCosts((Number(t.notional_usd) || 0) * movePct / 100, Number(t.notional_usd) || 0, "futures"); // net of fees
     if (pnl < -t.cost_usd) pnl = -t.cost_usd;                        // can't lose more than the margin
     const pnlPct = round((pnl / Math.max(0.01, t.cost_usd)) * 100, 2); // net return on margin
-    const status = hitTp ? "WIN" : "LOSS";
-    await fstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: pnlPct, closed_at: new Date() });
+    const status = pnl >= 0 ? "WIN" : "LOSS";
+    if (pnl < 0) blockReentry("futures", t.symbol, tfMin);          // cooldown after a losing leg
+    await fstore.close(t.id, { status, exit_price: rp(exit), exit_reason: reason, pnl_usd: round(pnl, 2), pnl_pct: pnlPct, closed_at: new Date() });
     const acct = await futuresAccount();
     console.log(`[futures] CLOSE ${t.direction} ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash}`);
     const day = await futuresDaily();
     await tgBroadcast(fmtPaperSell({
-      kind: "futures", symbol: t.symbol, direction: t.direction, leverage: t.leverage, win: hitTp, tpLevel: t.tp_level || 1,
+      kind: "futures", symbol: t.symbol, direction: t.direction, leverage: t.leverage, win: pnl >= 0, reason, tpLevel: t.tp_level || 1,
       cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2), pnl: round(pnl, 2), pnlPct,
       balance: round(settings.futuresCapitalUsd + acct.realized, 2), realized: acct.realized, day,
     }));
