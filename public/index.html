@@ -4,11 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Crypto Signal Engine</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-  <script>
-    tailwind.config = { theme: { extend: { colors: { ink: "#0b0e14", panel: "#131722", edge: "#1e2532" } } } };
-  </script>
+  <!-- Prebuilt Tailwind (no runtime CDN compiler) - loads instantly, works offline. Rebuild: npm run build:css -->
+  <link rel="stylesheet" href="/tailwind.css" />
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js" defer></script>
   <style>
     body { background: radial-gradient(1200px 600px at 20% -10%, #16203a 0%, #0b0e14 55%); overflow-x: hidden; }
     .glow { box-shadow: 0 0 0 1px rgba(99,102,241,.12), 0 8px 40px -14px rgba(56,189,248,.22); }
