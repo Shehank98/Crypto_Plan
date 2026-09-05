@@ -96,6 +96,7 @@
         <label class="flex items-center gap-1 text-sm text-slate-300">$ / trade <input id="paper-pos" type="number" min="1" step="5" value="20" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Max open <input id="paper-max" type="number" min="1" max="20" value="5" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Exit at <select id="paper-tp" class="rounded border border-edge bg-ink px-2 py-1 text-sm"><option value="1">TP1 (1:1)</option><option value="2">TP2 (2:1)</option><option value="3">TP3 (3:1)</option></select></label>
+        <span class="flex items-center gap-1 text-sm text-slate-300">Timeframes <span id="paper-tfs" class="flex items-center gap-1"></span></span>
         <label class="flex items-center gap-1 text-sm text-slate-300">Goal $/day <input id="paper-goal-usd" type="number" min="1" step="1" value="10" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Max TP1 wait (min, 0=any) <input id="paper-eta" type="number" min="0" step="30" value="0" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <button id="paper-save" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
@@ -126,6 +127,7 @@
         <label class="flex items-center gap-1 text-sm text-slate-300">Leverage <input id="fut-lev" type="number" min="1" max="125" value="20" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" />x</label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Max open <input id="fut-max" type="number" min="1" max="20" value="5" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Exit at <select id="fut-tp" class="rounded border border-edge bg-ink px-2 py-1 text-sm"><option value="1">TP1 (1:1)</option><option value="2">TP2 (2:1)</option><option value="3">TP3 (3:1)</option></select></label>
+        <span class="flex items-center gap-1 text-sm text-slate-300">Timeframes <span id="fut-tfs" class="flex items-center gap-1"></span></span>
         <label class="flex items-center gap-1 text-sm text-slate-300">Goal $/day <input id="fut-goal-usd" type="number" min="1" step="1" value="10" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <button id="fut-save" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
         <button id="fut-reset" class="ml-auto rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm text-rose-300 hover:bg-edge">Reset account</button>

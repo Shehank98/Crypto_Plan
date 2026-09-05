@@ -864,6 +864,7 @@ const settings = {
   paperGoalUsd: Number(process.env.PAPER_GOAL_USD || 10),        // profit target for the session (context / progress bar)
   paperMaxEtaMin: Number(process.env.PAPER_MAX_ETA_MIN || 0),    // 0 = no cap; else skip setups whose TP1 ETA is longer than this
   paperTpLevel: Number(process.env.PAPER_TP_LEVEL || 1),         // exit at TP1(1R,1:1) / TP2(2R,2:1) / TP3(3R,3:1)
+  paperTfs: (process.env.PAPER_TFS || "1h,4h,1d").split(",").map((x) => x.trim()).filter(Boolean),   // spot trades only these timeframes
   // FUTURES paper book (leveraged, long + short)
   futuresTrading: !/^(0|false|no|off)$/i.test(process.env.FUTURES_TRADING || "true"),
   futuresCapitalUsd: Number(process.env.FUTURES_CAPITAL_USD || 200), // starting margin balance
@@ -873,6 +874,7 @@ const settings = {
   futuresGoalUsd: Number(process.env.FUTURES_GOAL_USD || 10),
   futuresMaxEtaMin: Number(process.env.FUTURES_MAX_ETA_MIN || 0),
   futuresTpLevel: Number(process.env.FUTURES_TP_LEVEL || 1),
+  futuresTfs: (process.env.FUTURES_TFS || "1h,4h").split(",").map((x) => x.trim()).filter(Boolean),  // futures trades only these timeframes
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1111,6 +1113,7 @@ function fmtPaperSell(o) {
 // Does a signal qualify for the paper spot account? (good coin, high accuracy, tradeable now)
 function paperEligible(s) {
   if (s.direction !== "LONG" || !s.entry || !s.targets) return false;        // SPOT = buy only
+  if (!settings.paperTfs.includes(s.tf)) return false;                       // only the chosen timeframes
   if (s.confidence < TRACK_MIN_CONFIDENCE) return false;                     // top accuracy only (>=95%)
   if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return false; // still enterable
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
@@ -1225,10 +1228,17 @@ async function futuresDaily() {
 // Futures: long OR short, both high-accuracy. (Ranking uses the shared paperScore.)
 function futuresEligible(s) {
   if (s.direction !== "LONG" && s.direction !== "SHORT") return false;
+  if (!settings.futuresTfs.includes(s.tf)) return false;                     // only the chosen timeframes
   if (!s.entry || !s.targets || s.confidence < TRACK_MIN_CONFIDENCE) return false;
   if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return false;
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
   if (!s.quality || s.quality.score < 3) return false;
+  // LIQUIDATION SAFETY: at high leverage the ATR stop is often WIDER than the
+  // liquidation distance (~100/leverage %), so the trade wipes the whole margin
+  // before the stop. Skip those - only take setups whose stop sits safely inside
+  // liquidation (with a buffer), so the stop can actually protect the position.
+  const liqPct = 100 / Math.max(1, settings.futuresLeverage);
+  if (s.stop.riskPct >= liqPct * 0.85) return false;
   const eta = s.targets[0].etaMin;
   if (settings.futuresMaxEtaMin > 0 && eta != null && eta > settings.futuresMaxEtaMin) return false;
   return true;
@@ -1412,6 +1422,9 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (b.paperGoalUsd != null && Number.isFinite(+b.paperGoalUsd)) settings.paperGoalUsd = Math.max(1, +b.paperGoalUsd);
   if (b.paperMaxEtaMin != null && Number.isFinite(+b.paperMaxEtaMin)) settings.paperMaxEtaMin = Math.max(0, Math.round(+b.paperMaxEtaMin));
   if (b.paperTpLevel != null && Number.isFinite(+b.paperTpLevel)) settings.paperTpLevel = Math.min(3, Math.max(1, Math.round(+b.paperTpLevel)));
+  const cleanTfs = (a) => a.filter((t) => TF_MINUTES[t]);
+  if (Array.isArray(b.paperTfs) && cleanTfs(b.paperTfs).length) settings.paperTfs = cleanTfs(b.paperTfs);
+  if (Array.isArray(b.futuresTfs) && cleanTfs(b.futuresTfs).length) settings.futuresTfs = cleanTfs(b.futuresTfs);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
   if (b.futuresCapitalUsd != null && Number.isFinite(+b.futuresCapitalUsd)) settings.futuresCapitalUsd = Math.max(1, +b.futuresCapitalUsd);
   if (b.futuresMarginUsd != null && Number.isFinite(+b.futuresMarginUsd)) settings.futuresMarginUsd = Math.max(1, +b.futuresMarginUsd);
@@ -1500,7 +1513,7 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
   const day = await paperDaily();
   const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null; // progress is DAILY net
-  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, tfs: settings.paperTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
 
@@ -1527,7 +1540,7 @@ app.get("/api/futures/trades", wrap(async (_req, res) => {
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
   const day = await futuresDaily();
   const goal = settings.futuresGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null;
-  res.json({ enabled: settings.futuresTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, equityUsd: equity, realizedUsd: a.realized, marginPerTrade: settings.futuresMarginUsd, leverage: settings.futuresLeverage, maxOpen: settings.futuresMaxOpen, tpLevel: settings.futuresTpLevel, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.futuresMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  res.json({ enabled: settings.futuresTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, equityUsd: equity, realizedUsd: a.realized, marginPerTrade: settings.futuresMarginUsd, leverage: settings.futuresLeverage, maxOpen: settings.futuresMaxOpen, tpLevel: settings.futuresTpLevel, tfs: settings.futuresTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.futuresMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/futures/reset", wrap(async (_req, res) => { await fstore.reset(); res.json({ ok: true }); }));
 
@@ -1769,7 +1782,10 @@ async function indicatorTick() {
   if (indBusy) return;
   indBusy = true;
   try {
-    for (const tf of currentTfs()) { // scan + track every timeframe in use
+    // Scan every timeframe in use PLUS the ones the paper/futures books trade,
+    // so those books always have fresh signals (even if you never open that tab).
+    const tfs = [...new Set([...currentTfs(), ...settings.paperTfs, ...settings.futuresTfs].filter((t) => TF_MINUTES[t]))];
+    for (const tf of tfs) {
       const data = await scanMarket(tf, true);
       await openFrom(data);
     }
@@ -1794,4 +1810,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, fillFutures, fstore, settings };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings };

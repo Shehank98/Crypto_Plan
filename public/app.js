@@ -799,6 +799,17 @@ async function api2(p, body) {
 }
 
 // ---------- Paper trading ----------
+const TF_ALL = ["15m", "1h", "4h", "1d"];
+function renderTfChips(containerId, active) {
+  const el = $(containerId); if (!el) return;
+  const set = new Set(active || []);
+  el.innerHTML = TF_ALL.map((t) => `<label class="flex items-center gap-1 rounded border border-edge px-1.5 py-0.5 text-xs ${set.has(t) ? "bg-indigo-600 text-white" : "text-slate-400"}"><input type="checkbox" data-tf="${t}" ${set.has(t) ? "checked" : ""} class="hidden" />${t}</label>`);
+  el.querySelectorAll("input[data-tf]").forEach((cb) => cb.onchange = () => { cb.closest("label").className = `flex items-center gap-1 rounded border border-edge px-1.5 py-0.5 text-xs ${cb.checked ? "bg-indigo-600 text-white" : "text-slate-400"}`; });
+}
+function readTfChips(containerId) {
+  const el = $(containerId); if (!el) return [];
+  return [...el.querySelectorAll("input[data-tf]")].filter((c) => c.checked).map((c) => c.dataset.tf);
+}
 async function loadPaper() {
   let p;
   try { p = await api("/api/paper/trades"); } catch (e) { return; }
@@ -809,6 +820,7 @@ async function loadPaper() {
   if ($("paper-goal-usd") && p.goalUsd != null) $("paper-goal-usd").value = p.goalUsd;
   if ($("paper-eta") && p.maxEtaMin != null) $("paper-eta").value = p.maxEtaMin;
   if ($("paper-tp") && p.tpLevel != null) $("paper-tp").value = p.tpLevel;
+  renderTfChips("paper-tfs", p.tfs);
   const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
   // DAILY goal progress bar (resets at SL midnight). Trading continues past it.
   const d = p.daily;
@@ -844,7 +856,8 @@ async function loadPaper() {
 }
 async function savePaper() {
   try {
-    await api2("/api/settings", { paperTrading: $("paper-on").checked, paperMaxOpen: Number($("paper-max").value) || 5, paperPositionUsd: Number($("paper-pos").value) || 20, capitalUsd: Number($("paper-cap").value) || 200, paperGoalUsd: Number($("paper-goal-usd").value) || 10, paperMaxEtaMin: Number($("paper-eta").value) || 0, paperTpLevel: Number($("paper-tp").value) || 1 });
+    const tfs = readTfChips("paper-tfs");
+    await api2("/api/settings", { paperTrading: $("paper-on").checked, paperMaxOpen: Number($("paper-max").value) || 5, paperPositionUsd: Number($("paper-pos").value) || 20, capitalUsd: Number($("paper-cap").value) || 200, paperGoalUsd: Number($("paper-goal-usd").value) || 10, paperMaxEtaMin: Number($("paper-eta").value) || 0, paperTpLevel: Number($("paper-tp").value) || 1, ...(tfs.length ? { paperTfs: tfs } : {}) });
     $("paper-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
     loadPaper();
   } catch (e) { $("paper-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
@@ -863,6 +876,7 @@ async function loadFutures() {
   if ($("fut-lev") && p.leverage != null) $("fut-lev").value = p.leverage;
   if ($("fut-max") && p.maxOpen != null) $("fut-max").value = p.maxOpen;
   if ($("fut-tp") && p.tpLevel != null) $("fut-tp").value = p.tpLevel;
+  renderTfChips("fut-tfs", p.tfs);
   if ($("fut-goal-usd") && p.goalUsd != null) $("fut-goal-usd").value = p.goalUsd;
   const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
   const d = p.daily;
@@ -898,7 +912,8 @@ async function loadFutures() {
 }
 async function saveFutures() {
   try {
-    await api2("/api/settings", { futuresTrading: $("fut-on").checked, futuresCapitalUsd: Number($("fut-cap").value) || 200, futuresMarginUsd: Number($("fut-margin").value) || 10, futuresLeverage: Number($("fut-lev").value) || 20, futuresMaxOpen: Number($("fut-max").value) || 5, futuresTpLevel: Number($("fut-tp").value) || 1, futuresGoalUsd: Number($("fut-goal-usd").value) || 10 });
+    const tfs = readTfChips("fut-tfs");
+    await api2("/api/settings", { futuresTrading: $("fut-on").checked, futuresCapitalUsd: Number($("fut-cap").value) || 200, futuresMarginUsd: Number($("fut-margin").value) || 10, futuresLeverage: Number($("fut-lev").value) || 20, futuresMaxOpen: Number($("fut-max").value) || 5, futuresTpLevel: Number($("fut-tp").value) || 1, futuresGoalUsd: Number($("fut-goal-usd").value) || 10, ...(tfs.length ? { futuresTfs: tfs } : {}) });
     $("fut-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>'; loadFutures();
   } catch (e) { $("fut-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
 }
