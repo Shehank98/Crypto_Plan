@@ -1207,14 +1207,19 @@ async function fillPaper(signals) {
   if (!settings.paperTrading) return;
   if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;     // don't buy into a risk-off market
   if (dailyHalted((await paperDaily()).net, settings.capitalUsd)) return;    // daily loss circuit breaker
+  const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
   const ranked = signals.filter(paperEligible).sort((a, b) => paperScore(b) - paperScore(a));
-  for (const s of ranked) {
+  for (const s0 of ranked) {
     if (await pstore.countOpen() >= settings.paperMaxOpen) break;            // portfolio full
     const open = await pstore.openTrades();
     if (sameDirCount(open, "LONG") >= settings.maxSameDir) break;            // correlation cap (spot = all long)
     const acct = await paperAccount();
     if (acct.cash < 1) break;                                                // no cash to deploy
-    if (await pstore.hasOpen(s.symbol)) continue;                            // already holding it
+    if (await pstore.hasOpen(s0.symbol)) continue;                           // already holding it
+    const P = prices.get(s0.symbol);
+    if (P == null) continue;
+    const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
+    if (s.entry.window !== "OPEN") continue;                                 // extended/stale now -> don't enter (no fake gains)
     const equity = acct.start + acct.realized;
     const cost = settings.riskSizing
       ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: 1 })
@@ -1354,16 +1359,21 @@ function futuresEligible(s) {
 async function fillFutures(signals) {
   if (!settings.futuresTrading) return;
   if (dailyHalted((await futuresDaily()).net, settings.futuresCapitalUsd)) return; // daily loss circuit breaker
+  const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
   const ranked = signals.filter(futuresEligible).sort((a, b) => paperScore(b) - paperScore(a));
-  for (const s of ranked) {
+  for (const s0 of ranked) {
     if (await fstore.countOpen() >= settings.futuresMaxOpen) break;
     const acct = await futuresAccount();
     if (acct.cash < 1) break;
-    if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") continue; // trade with the trend
-    if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s.direction === "SHORT") continue;
+    if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s0.direction === "LONG") continue; // trade with the trend
+    if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s0.direction === "SHORT") continue;
     const open = await fstore.openTrades();
-    if (sameDirCount(open, s.direction) >= settings.maxSameDir) continue;    // correlation cap per direction
-    if (await fstore.hasOpen(s.symbol)) continue;
+    if (sameDirCount(open, s0.direction) >= settings.maxSameDir) continue;   // correlation cap per direction
+    if (await fstore.hasOpen(s0.symbol)) continue;
+    const P = prices.get(s0.symbol);
+    if (P == null) continue;
+    const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
+    if (s.entry.window !== "OPEN") continue;                                 // extended/stale now -> don't enter (no fake gains)
     const equity = acct.start + acct.realized;
     const margin = settings.riskSizing
       ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: Math.max(1, settings.futuresLeverage) })
