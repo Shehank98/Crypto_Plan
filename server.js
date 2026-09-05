@@ -875,6 +875,16 @@ const settings = {
   futuresMaxEtaMin: Number(process.env.FUTURES_MAX_ETA_MIN || 0),
   futuresTpLevel: Number(process.env.FUTURES_TP_LEVEL || 1),
   futuresTfs: (process.env.FUTURES_TFS || "1h,4h").split(",").map((x) => x.trim()).filter(Boolean),  // futures trades only these timeframes
+  // --- Professional risk & cost model (applies to BOTH paper books) ---
+  feePctSpot: Number(process.env.FEE_PCT_SPOT || 0.1),     // exchange fee % per side (spot taker ~0.1)
+  feePctFutures: Number(process.env.FEE_PCT_FUTURES || 0.04), // futures taker ~0.04 per side
+  slippagePct: Number(process.env.SLIPPAGE_PCT || 0.03),  // assumed slippage % per side
+  riskSizing: !/^(0|false|no|off)$/i.test(process.env.RISK_SIZING || "true"), // size by % risk of equity (vs fixed $)
+  baseRiskPct: Number(process.env.BASE_RISK_PCT || 1),    // % of equity risked per trade at the 95% floor
+  maxRiskPct: Number(process.env.MAX_RISK_PCT || 2),      // hard cap - conviction can scale up to here, never past
+  maxPositionPct: Number(process.env.MAX_POSITION_PCT || 40), // one position can't exceed this % of equity
+  maxDailyLossPct: Number(process.env.MAX_DAILY_LOSS_PCT || 15), // halt a book for the day past -this% of capital (0=off)
+  maxSameDir: Number(process.env.MAX_SAME_DIR || 3),      // max concurrent positions in one direction (correlation cap)
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1136,18 +1146,52 @@ function paperScore(s) {
 async function fillPaper(signals) {
   if (!settings.paperTrading) return;
   if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;     // don't buy into a risk-off market
+  if (dailyHalted((await paperDaily()).net, settings.capitalUsd)) return;    // daily loss circuit breaker
   const ranked = signals.filter(paperEligible).sort((a, b) => paperScore(b) - paperScore(a));
   for (const s of ranked) {
     if (await pstore.countOpen() >= settings.paperMaxOpen) break;            // portfolio full
+    const open = await pstore.openTrades();
+    if (sameDirCount(open, "LONG") >= settings.maxSameDir) break;            // correlation cap (spot = all long)
     const acct = await paperAccount();
     if (acct.cash < 1) break;                                                // no cash to deploy
     if (await pstore.hasOpen(s.symbol)) continue;                            // already holding it
-    await openPaper(s, Math.min(settings.paperPositionUsd, acct.cash)).catch((e) => console.warn("[paper]", e.message));
+    const equity = acct.start + acct.realized;
+    const cost = settings.riskSizing
+      ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: 1 })
+      : Math.min(settings.paperPositionUsd, acct.cash);
+    if (cost < 1) continue;
+    await openPaper(s, cost).catch((e) => console.warn("[paper]", e.message));
   }
 }
 // Which target to exit at (TP1=1R/1:1, TP2=2R/2:1, TP3=3R/3:1). Higher R:R but
 // lower hit-rate the further out you go.
 function tpTarget(s, level) { const i = Math.min(Math.max(1, level || 1), s.targets.length) - 1; return { idx: i, t: s.targets[i] }; }
+
+// --- Shared professional risk & cost model (both paper books) ---------------
+// Round-trip cost as a % of NOTIONAL: exchange fee (both sides) + slippage (both sides).
+function costDragPct(kind) {
+  const fee = kind === "futures" ? settings.feePctFutures : settings.feePctSpot;
+  return (fee + settings.slippagePct) * 2;
+}
+// Net PnL after fees + slippage on the traded notional.
+function netAfterCosts(grossPnl, notional, kind) { return grossPnl - Math.abs(notional) * costDragPct(kind) / 100; }
+// Conviction override: risk more on surer trades, but NEVER past maxRiskPct.
+// 95% conviction -> baseRiskPct; 100% -> maxRiskPct (linear in between).
+function convictionRiskPct(confidence) {
+  const frac = Math.max(0, Math.min(1, (confidence - TRACK_MIN_CONFIDENCE) / Math.max(1, 100 - TRACK_MIN_CONFIDENCE)));
+  return Math.min(settings.maxRiskPct, settings.baseRiskPct + (settings.maxRiskPct - settings.baseRiskPct) * frac);
+}
+// Position $ (spot cost or futures margin) sized so a stop-out loses ~risk% of
+// equity, scaled by conviction, capped by cash and max-position size.
+function riskBasedCost({ equity, cashAvail, stopRiskPct, confidence, leverage = 1 }) {
+  const riskUsd = equity * convictionRiskPct(confidence) / 100;
+  const lossPerDollar = Math.max(0.0001, leverage * stopRiskPct / 100); // fraction of cost lost at the stop
+  let cost = riskUsd / lossPerDollar;
+  cost = Math.min(cost, cashAvail, equity * settings.maxPositionPct / 100);
+  return round(cost, 2);
+}
+function dailyHalted(dailyNet, capital) { return settings.maxDailyLossPct > 0 && dailyNet <= -(capital * settings.maxDailyLossPct / 100); }
+function sameDirCount(openRows, direction) { return openRows.filter((t) => t.direction === direction).length; }
 // Buy one qualifying signal for `cost` dollars. (Ranking/eligibility done by fillPaper.)
 async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
@@ -1178,7 +1222,8 @@ async function managePaper(prices) {
     if (!hitTp && !hitStop) continue;
     const exit = hitTp ? t.tp1 : t.stop;
     const movePct = (exit - t.entry_price) / t.entry_price * 100;            // spot, long-only
-    const pnl = (Number(t.cost_usd) || 0) * movePct / 100;                   // profit on the $ invested
+    const gross = (Number(t.cost_usd) || 0) * movePct / 100;                 // gross profit on the $ invested
+    const pnl = netAfterCosts(gross, Number(t.cost_usd) || 0, "spot");       // net of fees + slippage
     const status = hitTp ? "WIN" : "LOSS";
     await pstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP1" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: round(movePct, 2), closed_at: new Date() });
     const acct = await paperAccount();
@@ -1245,6 +1290,7 @@ function futuresEligible(s) {
 }
 async function fillFutures(signals) {
   if (!settings.futuresTrading) return;
+  if (dailyHalted((await futuresDaily()).net, settings.futuresCapitalUsd)) return; // daily loss circuit breaker
   const ranked = signals.filter(futuresEligible).sort((a, b) => paperScore(b) - paperScore(a));
   for (const s of ranked) {
     if (await fstore.countOpen() >= settings.futuresMaxOpen) break;
@@ -1252,8 +1298,15 @@ async function fillFutures(signals) {
     if (acct.cash < 1) break;
     if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") continue; // trade with the trend
     if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s.direction === "SHORT") continue;
+    const open = await fstore.openTrades();
+    if (sameDirCount(open, s.direction) >= settings.maxSameDir) continue;    // correlation cap per direction
     if (await fstore.hasOpen(s.symbol)) continue;
-    await openFutures(s, Math.min(settings.futuresMarginUsd, acct.cash)).catch((e) => console.warn("[futures]", e.message));
+    const equity = acct.start + acct.realized;
+    const margin = settings.riskSizing
+      ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: Math.max(1, settings.futuresLeverage) })
+      : Math.min(settings.futuresMarginUsd, acct.cash);
+    if (margin < 1) continue;
+    await openFutures(s, margin).catch((e) => console.warn("[futures]", e.message));
   }
 }
 async function openFutures(s, margin) {
@@ -1289,9 +1342,9 @@ async function manageFutures(prices) {
     if (!hitTp && !hitStop) continue;
     const exit = hitTp ? t.tp1 : t.stop;
     const movePct = (long ? (exit - t.entry_price) : (t.entry_price - exit)) / t.entry_price * 100;
-    let pnl = (Number(t.notional_usd) || 0) * movePct / 100;         // leveraged $ result
+    let pnl = netAfterCosts((Number(t.notional_usd) || 0) * movePct / 100, Number(t.notional_usd) || 0, "futures"); // net of fees
     if (pnl < -t.cost_usd) pnl = -t.cost_usd;                        // can't lose more than the margin
-    const pnlPct = round(movePct * (t.leverage || 1), 2);           // return on margin
+    const pnlPct = round((pnl / Math.max(0.01, t.cost_usd)) * 100, 2); // net return on margin
     const status = hitTp ? "WIN" : "LOSS";
     await fstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: pnlPct, closed_at: new Date() });
     const acct = await futuresAccount();
@@ -1396,7 +1449,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1425,6 +1478,11 @@ app.post("/api/settings", wrap(async (req, res) => {
   const cleanTfs = (a) => a.filter((t) => TF_MINUTES[t]);
   if (Array.isArray(b.paperTfs) && cleanTfs(b.paperTfs).length) settings.paperTfs = cleanTfs(b.paperTfs);
   if (Array.isArray(b.futuresTfs) && cleanTfs(b.futuresTfs).length) settings.futuresTfs = cleanTfs(b.futuresTfs);
+  if (typeof b.riskSizing === "boolean") settings.riskSizing = b.riskSizing;
+  const numSet = (k, min, max) => { if (b[k] != null && Number.isFinite(+b[k])) settings[k] = Math.max(min, Math.min(max, +b[k])); };
+  numSet("baseRiskPct", 0.1, 10); numSet("maxRiskPct", 0.1, 20); numSet("maxPositionPct", 1, 100);
+  numSet("maxDailyLossPct", 0, 100); numSet("maxSameDir", 1, 20);
+  numSet("feePctSpot", 0, 5); numSet("feePctFutures", 0, 5); numSet("slippagePct", 0, 5);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
   if (b.futuresCapitalUsd != null && Number.isFinite(+b.futuresCapitalUsd)) settings.futuresCapitalUsd = Math.max(1, +b.futuresCapitalUsd);
   if (b.futuresMarginUsd != null && Number.isFinite(+b.futuresMarginUsd)) settings.futuresMarginUsd = Math.max(1, +b.futuresMarginUsd);

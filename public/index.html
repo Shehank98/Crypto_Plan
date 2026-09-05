@@ -145,6 +145,23 @@
 
     <!-- SETTINGS TAB -->
     <div id="tab-settings" class="hidden">
+      <div class="mb-4 card p-4">
+        <h3 class="mb-1 text-sm font-semibold text-slate-300">🛡️ Risk model <span class="text-xs font-normal text-slate-500">(applies to both paper books)</span></h3>
+        <p class="mb-3 text-xs text-slate-500">Professional risk sizing: each trade risks a % of equity (not a fixed $), scaled up on higher-conviction setups but never past the hard cap. Fees + slippage are charged on every trade so results are realistic. A daily-loss breaker halts a book after a bad day; a correlation cap limits same-direction positions.</p>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-300">
+          <label class="flex items-center gap-2"><input id="rk-sizing" type="checkbox" class="h-4 w-4" /> <b>Risk-based sizing</b> (off = fixed $/trade)</label>
+          <label class="flex items-center gap-1">Base risk % <input id="rk-base" type="number" min="0.1" step="0.1" value="1" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Max risk % <input id="rk-max" type="number" min="0.1" step="0.1" value="2" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Max position % <input id="rk-pos" type="number" min="1" step="5" value="40" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Daily-loss halt % <input id="rk-dl" type="number" min="0" step="1" value="15" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Max same direction <input id="rk-sd" type="number" min="1" step="1" value="3" class="w-14 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Spot fee % <input id="rk-fs" type="number" min="0" step="0.01" value="0.1" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Futures fee % <input id="rk-ff" type="number" min="0" step="0.01" value="0.04" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <label class="flex items-center gap-1">Slippage % <input id="rk-sl" type="number" min="0" step="0.01" value="0.03" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+          <button id="rk-save" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">Save risk model</button>
+          <span id="rk-status" class="text-xs"></span>
+        </div>
+      </div>
       <div class="grid gap-4 md:grid-cols-2">
         <div class="card p-4">
           <h3 class="mb-1 text-sm font-semibold text-slate-300">🔌 Binance Spot Testnet</h3>
