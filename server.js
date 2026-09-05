@@ -623,11 +623,12 @@ async function initStore() {
       id SERIAL PRIMARY KEY, symbol VARCHAR(20), tf VARCHAR(5), direction VARCHAR(5), confidence INT,
       entry_price DOUBLE PRECISION, tp1 DOUBLE PRECISION, stop DOUBLE PRECISION,
       cost_usd DOUBLE PRECISION, qty DOUBLE PRECISION, quality VARCHAR(12),
+      eta1_min DOUBLE PRECISION, roi_score DOUBLE PRECISION,
       status VARCHAR(10) DEFAULT 'OPEN', exit_price DOUBLE PRECISION, exit_reason VARCHAR(12),
       pnl_usd DOUBLE PRECISION, pnl_pct DOUBLE PRECISION,
       opened_at TIMESTAMPTZ DEFAULT NOW(), closed_at TIMESTAMPTZ )`);
-    // Migrate an earlier (leveraged) paper_trades table to the spot shape if needed.
-    for (const col of ["cost_usd DOUBLE PRECISION", "qty DOUBLE PRECISION", "quality VARCHAR(12)"])
+    // Migrate an earlier paper_trades table to the current shape if needed.
+    for (const col of ["cost_usd DOUBLE PRECISION", "qty DOUBLE PRECISION", "quality VARCHAR(12)", "eta1_min DOUBLE PRECISION", "roi_score DOUBLE PRECISION"])
       await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
     await pool.query(`CREATE TABLE IF NOT EXISTS app_settings ( k VARCHAR(40) PRIMARY KEY, v TEXT )`);
     await forex.initSchema().catch((e) => console.warn("[forex] schema:", e.message));
@@ -762,11 +763,12 @@ async function openFrom(data) {
       // Skip illiquid junk (tokenized stocks, micro-caps) - they produce the ugly outlier losses.
       if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
       await store.open(s).catch((e) => console.warn("[track]", e.message));
-      await openPaper(s).catch((e) => console.warn("[paper]", e.message)); // simulated auto-trade (no exchange)
       if (settings.tgApproval) await proposeTrade(s).catch((e) => console.warn("[propose]", e.message)); // ask on Telegram first
       else await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
     }
   }
+  // Paper: rank ALL signals by ROI/time/accuracy and buy the best that fit (rotation).
+  await fillPaper(data.signals).catch((e) => console.warn("[paper]", e.message));
 }
 
 async function computeStats() {
@@ -843,6 +845,8 @@ const settings = {
   paperTrading: !/^(0|false|no|off)$/i.test(process.env.PAPER_TRADING || "true"), // simulate spot trades in-app (no exchange)
   paperMaxOpen: Number(process.env.PAPER_MAX_OPEN || 5),        // max concurrent paper positions
   paperPositionUsd: Number(process.env.PAPER_POSITION_USD || 20), // $ spent per SPOT trade (buy this much of the coin)
+  paperGoalUsd: Number(process.env.PAPER_GOAL_USD || 10),        // profit target for the session (context / progress bar)
+  paperMaxEtaMin: Number(process.env.PAPER_MAX_ETA_MIN || 0),    // 0 = no cap; else skip setups whose TP1 ETA is longer than this
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1004,7 +1008,7 @@ const pstore = {
   async hasOpen(symbol) { if (useDb) { const { rows } = await pool.query("SELECT 1 FROM paper_trades WHERE symbol=$1 AND status='OPEN' LIMIT 1", [symbol]); return rows.length > 0; } return pMem.some((t) => t.symbol === symbol && t.status === "OPEN"); },
   async countOpen() { if (useDb) return +(await pool.query("SELECT COUNT(*) c FROM paper_trades WHERE status='OPEN'")).rows[0].c; return pMem.filter((t) => t.status === "OPEN").length; },
   async openCost() { if (useDb) return +((await pool.query("SELECT COALESCE(SUM(cost_usd),0) s FROM paper_trades WHERE status='OPEN'")).rows[0].s) || 0; return pMem.filter((t) => t.status === "OPEN").reduce((a, t) => a + (Number(t.cost_usd) || 0), 0); },
-  async insert(t) { if (useDb) { const { rows } = await pool.query("INSERT INTO paper_trades (symbol,tf,direction,confidence,entry_price,tp1,stop,cost_usd,qty,quality) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id", [t.symbol, t.tf, t.direction, t.confidence, t.entry_price, t.tp1, t.stop, t.cost_usd, t.qty, t.quality]); return rows[0].id; } const id = pId++; pMem.push({ id, status: "OPEN", opened_at: new Date().toISOString(), ...t }); return id; },
+  async insert(t) { if (useDb) { const { rows } = await pool.query("INSERT INTO paper_trades (symbol,tf,direction,confidence,entry_price,tp1,stop,cost_usd,qty,quality,eta1_min,roi_score) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id", [t.symbol, t.tf, t.direction, t.confidence, t.entry_price, t.tp1, t.stop, t.cost_usd, t.qty, t.quality, t.eta1_min, t.roi_score]); return rows[0].id; } const id = pId++; pMem.push({ id, status: "OPEN", opened_at: new Date().toISOString(), ...t }); return id; },
   async close(id, f) { if (useDb) { const keys = Object.keys(f); const set = keys.map((k, i) => `${k}=$${i + 2}`).join(","); await pool.query(`UPDATE paper_trades SET ${set} WHERE id=$1`, [id, ...keys.map((k) => f[k])]); } else { const m = pMem.find((x) => x.id === id); if (m) Object.assign(m, f); } },
   async reset() { if (useDb) await pool.query("DELETE FROM paper_trades"); else { pMem.length = 0; pId = 1; } },
 };
@@ -1019,27 +1023,54 @@ async function paperAccount() {
   return { start: settings.capitalUsd, realized: round(realized, 2), invested: round(invested, 2), cash: round(settings.capitalUsd + realized - invested, 2), wins, losses, closed: closed.length };
 }
 async function tgBroadcast(text) { if (!bot || chats.size === 0) return; for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {}); }
+// Format an absolute time (ms) as HH:MM Sri Lanka time.
+function slClock(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
 
-// Buy a qualifying signal on the paper spot account, if cash and a slot allow.
-async function openPaper(s) {
+// Does a signal qualify for the paper spot account? (good coin, high accuracy, tradeable now)
+function paperEligible(s) {
+  if (s.direction !== "LONG" || !s.entry || !s.targets) return false;        // SPOT = buy only
+  if (s.confidence < TRACK_MIN_CONFIDENCE) return false;                     // top accuracy only (>=95%)
+  if (s.entry.window === "CLOSED" || s.entry.window === "CHASE") return false; // still enterable
+  if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
+  if (!s.quality || s.quality.score < 3) return false;                       // good coins only (Blue-chip / Solid)
+  const eta = s.targets[0].etaMin;
+  if (settings.paperMaxEtaMin > 0 && eta != null && eta > settings.paperMaxEtaMin) return false; // limited time
+  return true;
+}
+// ROI-per-hour x accuracy: rewards fast, high-return, high-conviction setups so
+// the account chases the highest ROI in the least time. Higher = better.
+function paperScore(s) {
+  const gain = s.targets[0].gainPct || 0;
+  const etaMin = s.targets[0].etaMin;
+  const etaH = etaMin && etaMin > 0 ? etaMin / 60 : 6;                       // unknown ETA -> treat as slow (6h)
+  const velocity = gain / Math.max(0.1, etaH);                              // % gain per hour
+  return velocity * (s.confidence / 100);
+}
+// Each scan: rank all eligible setups by ROI/time/accuracy and buy the BEST ones
+// that free cash + open slots allow. This is the "highest ROI in limited time" core.
+async function fillPaper(signals) {
   if (!settings.paperTrading) return;
-  if (s.direction !== "LONG") return;                                        // SPOT = buy only
-  if (!s.entry || !s.targets || s.confidence < TRACK_MIN_CONFIDENCE) return;
-  if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return;
-  if (!s.quality || s.quality.score < 3) return;                             // good coins only (Blue-chip / Solid)
   if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;     // don't buy into a risk-off market
-  if (await pstore.hasOpen(s.symbol)) return;                                // one open position per coin
-  if (await pstore.countOpen() >= settings.paperMaxOpen) return;             // portfolio slot cap
-  const acct = await paperAccount();
-  const want = settings.paperPositionUsd;
-  const cost = Math.min(want, acct.cash);                                    // can't spend cash you don't have
-  if (cost < 1) return;                                                      // fully deployed - wait for a slot to free
+  const ranked = signals.filter(paperEligible).sort((a, b) => paperScore(b) - paperScore(a));
+  for (const s of ranked) {
+    if (await pstore.countOpen() >= settings.paperMaxOpen) break;            // portfolio full
+    const acct = await paperAccount();
+    if (acct.cash < 1) break;                                                // no cash to deploy
+    if (await pstore.hasOpen(s.symbol)) continue;                            // already holding it
+    await openPaper(s, Math.min(settings.paperPositionUsd, acct.cash)).catch((e) => console.warn("[paper]", e.message));
+  }
+}
+// Buy one qualifying signal for `cost` dollars. (Ranking/eligibility done by fillPaper.)
+async function openPaper(s, cost) {
+  if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
+  if (cost < 1) return;
   const entry = s.priceUsd, tp1 = s.targets[0].priceUsd, stop = s.stop.priceUsd;
-  const qty = cost / entry;
-  const id = await pstore.insert({ symbol: s.symbol, tf: s.tf, direction: "LONG", confidence: s.confidence, entry_price: entry, tp1, stop, cost_usd: round(cost, 2), qty: Number(qty.toPrecision(8)), quality: s.quality.tier });
-  console.log(`[paper] BUY ${s.symbol} $${round(cost, 2)} (${qty.toPrecision(6)} @ ${entry}) TP1 ${tp1} stop ${stop} [cash left $${round(acct.cash - cost, 2)}]`);
+  const qty = cost / entry, eta1 = s.targets[0].etaMin ?? null;
+  const id = await pstore.insert({ symbol: s.symbol, tf: s.tf, direction: "LONG", confidence: s.confidence, entry_price: entry, tp1, stop, cost_usd: round(cost, 2), qty: Number(qty.toPrecision(8)), quality: s.quality.tier, eta1_min: eta1, roi_score: round(paperScore(s), 3) });
+  const etaTxt = eta1 != null ? ` · est TP1 by ${slClock(Date.now() + eta1 * 60000)} (~${s.targets[0].etaLabel})` : "";
+  console.log(`[paper] BUY ${s.symbol} $${round(cost, 2)} (${qty.toPrecision(6)} @ ${entry}) TP1 ${tp1} stop ${stop}${etaTxt}`);
   const g1 = s.targets[0].gainPct, proj = round(cost * g1 / 100, 2);
-  await tgBroadcast(`🟢 *PAPER BUY ${s.symbol}* (${s.quality.tier}, ${s.confidence}%)\nSpent *$${round(cost, 2)}* → ${Number(qty.toPrecision(6))} ${s.symbol} @ ${fmtUsd(entry)}\n🎯 TP1 ${fmtUsd(tp1)} (+${g1}%) → *+$${proj}*  ·  🛑 Stop ${fmtUsd(stop)} (-${s.stop.riskPct}%)\n_Auto-managed — closes at TP1 or the stop, then rotates into the next best coin._`);
+  await tgBroadcast(`🟢 *PAPER BUY ${s.symbol}* (${s.quality.tier}, ${s.confidence}%)\nSpent *$${round(cost, 2)}* → ${Number(qty.toPrecision(6))} ${s.symbol} @ ${fmtUsd(entry)}\n🎯 TP1 ${fmtUsd(tp1)} (+${g1}%) → *+$${proj}*${eta1 != null ? `\n⏱ Est TP1 by *${slClock(Date.now() + eta1 * 60000)}* (~${s.targets[0].etaLabel})` : ""}\n🛑 Stop ${fmtUsd(stop)} (-${s.stop.riskPct}%)\n_Auto-managed — closes at TP1 or the stop, then rotates into the next best coin._`);
   return id;
 }
 // Sell open paper positions at TP1 (profit) or the stop (loss); spot PnL on the
@@ -1154,7 +1185,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1177,6 +1208,8 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.paperTrading === "boolean") settings.paperTrading = b.paperTrading;
   if (b.paperMaxOpen != null && Number.isFinite(+b.paperMaxOpen)) settings.paperMaxOpen = Math.max(1, Math.min(20, Math.round(+b.paperMaxOpen)));
   if (b.paperPositionUsd != null && Number.isFinite(+b.paperPositionUsd)) settings.paperPositionUsd = Math.max(1, +b.paperPositionUsd);
+  if (b.paperGoalUsd != null && Number.isFinite(+b.paperGoalUsd)) settings.paperGoalUsd = Math.max(1, +b.paperGoalUsd);
+  if (b.paperMaxEtaMin != null && Number.isFinite(+b.paperMaxEtaMin)) settings.paperMaxEtaMin = Math.max(0, Math.round(+b.paperMaxEtaMin));
   if (b.clearKeys === true) { settings.apiKey = ""; settings.apiSecret = ""; settings.autoTrade = false; }
   lastTnError = null;
   await saveSettings();
@@ -1244,14 +1277,19 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
     // Estimated profit if this position reaches TP1 (spot: % move x amount invested).
     const tp1Pct = (t.tp1 - t.entry_price) / t.entry_price * 100;
     const tp1ProfitUsd = round((Number(t.cost_usd) || 0) * tp1Pct / 100, 2);
-    return { ...t, livePrice: P ?? null, marketValueUsd: mktValue == null ? null : round(mktValue, 2), unrealizedUsd: uPnl == null ? null : round(uPnl, 2), unrealizedPct: movePct == null ? null : round(movePct, 2), tp1Pct: round(tp1Pct, 2), tp1ProfitUsd };
+    // Estimated TP1 time in Sri Lanka time = opened_at + the TP1 ETA.
+    const openedMs = new Date(t.opened_at).getTime();
+    const etaTp1SL = t.eta1_min != null ? slClock(openedMs + t.eta1_min * 60000) : null;
+    const etaLeftMin = t.eta1_min != null ? Math.round((openedMs + t.eta1_min * 60000 - Date.now()) / 60000) : null;
+    return { ...t, livePrice: P ?? null, marketValueUsd: mktValue == null ? null : round(mktValue, 2), unrealizedUsd: uPnl == null ? null : round(uPnl, 2), unrealizedPct: movePct == null ? null : round(movePct, 2), tp1Pct: round(tp1Pct, 2), tp1ProfitUsd, etaTp1SL, etaLeftMin };
   });
   const closed = rows.filter((t) => t.status === "WIN" || t.status === "LOSS");
   const a = await paperAccount();
   const holdingsValue = open.reduce((acc, t) => acc + (t.marketValueUsd != null ? t.marketValueUsd : (Number(t.cost_usd) || 0)), 0);
   const equity = a.cash + holdingsValue;                                     // cash + live value of coins held
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
-  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((a.realized / goal) * 100, 0) : null;
+  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, goalUsd: goal, goalPct, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
 
@@ -1507,4 +1545,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, openPaper, managePaper, paperAccount, pstore, settings };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, openPaper, managePaper, paperAccount, paperScore, paperEligible, fillPaper, pstore, settings };

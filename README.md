@@ -172,17 +172,26 @@ The **📝 Paper Trading** tab simulates a **real spot account**: a fixed pot of
 (`CAPITAL_USD`, e.g. $200) that **buys good coins and rotates**. It runs **24/7** with nothing to
 configure and nothing to break: no Binance, no API keys, no proxy, no geo-block.
 
+**Goal-driven ranking (highest ROI in the least time):** every scan, all eligible setups are
+scored by **ROI-per-hour × accuracy** — `(% gain to TP1 ÷ hours to TP1) × (confidence/100)` — and
+the account buys the **top-ranked** ones that free cash and open slots allow. A fast +4%-in-30-min
+setup outranks a slow +5%-in-10-hours one, so your capital compounds quickly toward the goal.
+
 How each trade works — exactly like a real spot account:
 
 1. A signal scores **≥95%** on a **good coin** (Blue-chip / Solid quality, liquid, market not
-   risk-off).
-2. It **buys** `PAPER_POSITION_USD` of it at the **real live price** — the tab shows the **$ size**
-   and the **coin quantity** you'd hold.
+   risk-off) and is **still enterable** (not already run past its zone).
+2. It **buys** `PAPER_POSITION_USD` of the **best-ranked** one at the **real live price** — the tab
+   shows the **$ size**, **coin quantity**, the **estimated TP1 profit**, and the **estimated TP1
+   time in Sri Lanka time**.
 3. That cash is now **invested** (free cash drops). You can hold at most `PAPER_MAX_OPEN` coins.
 4. It **sells** at **TP1** (profit) or the **stop** (loss). The cash **plus profit** returns to
    free cash.
-5. On the next scan the freed cash **rotates into the next best coin** — highest-confidence
-   qualifying signal you're not already holding.
+5. On the next scan the freed cash **rotates into the next best coin** by the ROI score.
+
+**Goal + time controls:** set a **profit goal** (`PAPER_GOAL_USD`, default $10) — a progress bar
+tracks realized profit toward it. Optionally cap **Max TP1 wait** (`PAPER_MAX_ETA_MIN`) to only
+take setups expected to hit TP1 within N minutes (0 = no cap).
 
 - **Long-only, no leverage** — spot can only buy, so P/L is the plain % move on the amount
   invested (a +3% winner on $20 = **+$0.60**). No liquidations.
