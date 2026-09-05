@@ -1025,6 +1025,31 @@ async function paperAccount() {
 async function tgBroadcast(text) { if (!bot || chats.size === 0) return; for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {}); }
 // Format an absolute time (ms) as HH:MM Sri Lanka time.
 function slClock(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
+// Structured PAPER BUY / SELL cards (same house style as the signal card).
+function fmtPaperBuy(o) {
+  return `🟢 *PAPER BUY — ${o.symbol}*\n`
+    + `💎 ${o.quality} Setup | ${o.alloc}% Allocation\n\n`
+    + `💵 Capital: *$${o.cost}*\n`
+    + `🪙 Entry: ${o.qty} ${o.symbol} @ ${fmtUsd(o.entry)}\n\n`
+    + `🎯 *TAKE PROFIT:* ${fmtUsd(o.tp1)}\n`
+    + `📈 Target: +${o.gainPct}% → *+$${o.proj}*\n\n`
+    + `🛑 *STOP LOSS:* ${fmtUsd(o.stop)}\n`
+    + `📉 Risk: -${o.riskPct}% → *-$${o.loss}*\n\n`
+    + (o.etaSL ? `⏱ Est. TP1: *${o.etaSL}* (~${o.etaLabel})\n\n` : "")
+    + `⚙️ *AUTO-MANAGED*\nPosition closes automatically at TP1 or Stop Loss, then the strategy rotates into the next selected setup.\n\n`
+    + `${TG_FOOTER}\n\n${DISC_PAPER}`;
+}
+function fmtPaperSell(o) {
+  const sd = (n) => (n >= 0 ? "+$" : "-$") + Math.abs(n);   // signed dollars: -$0.65, +$0.65
+  return `${o.win ? "🎯" : "🛑"} *PAPER SELL — ${o.symbol}*\n`
+    + `${o.win ? "✅ TP1 HIT | Win" : "❌ STOP LOSS | Loss"}\n\n`
+    + `💵 Bought: $${o.cost} @ ${fmtUsd(o.entry)}\n`
+    + `${o.win ? "💰" : "💸"} Sold: ${fmtUsd(o.exit)}  (${o.movePct >= 0 ? "+" : ""}${o.movePct}%)\n`
+    + `${o.win ? "📈 Profit" : "📉 Loss"}: *${sd(o.pnl)}*\n\n`
+    + `🏦 Balance: *$${o.balance}*  ·  Realized: ${sd(o.realized)}\n`
+    + `🔄 Rotating into the next best setup.\n\n`
+    + `${TG_FOOTER}\n\n${DISC_PAPER}`;
+}
 
 // Does a signal qualify for the paper spot account? (good coin, high accuracy, tradeable now)
 function paperEligible(s) {
@@ -1070,7 +1095,13 @@ async function openPaper(s, cost) {
   const etaTxt = eta1 != null ? ` · est TP1 by ${slClock(Date.now() + eta1 * 60000)} (~${s.targets[0].etaLabel})` : "";
   console.log(`[paper] BUY ${s.symbol} $${round(cost, 2)} (${qty.toPrecision(6)} @ ${entry}) TP1 ${tp1} stop ${stop}${etaTxt}`);
   const g1 = s.targets[0].gainPct, proj = round(cost * g1 / 100, 2);
-  await tgBroadcast(`🟢 *PAPER BUY ${s.symbol}* (${s.quality.tier}, ${s.confidence}%)\nSpent *$${round(cost, 2)}* → ${Number(qty.toPrecision(6))} ${s.symbol} @ ${fmtUsd(entry)}\n🎯 TP1 ${fmtUsd(tp1)} (+${g1}%) → *+$${proj}*${eta1 != null ? `\n⏱ Est TP1 by *${slClock(Date.now() + eta1 * 60000)}* (~${s.targets[0].etaLabel})` : ""}\n🛑 Stop ${fmtUsd(stop)} (-${s.stop.riskPct}%)\n_Auto-managed — closes at TP1 or the stop, then rotates into the next best coin._`);
+  const riskPct = s.stop.riskPct, loss = round(cost * riskPct / 100, 2);
+  const alloc = round((cost / Math.max(1, settings.capitalUsd)) * 100, 0);
+  await tgBroadcast(fmtPaperBuy({
+    symbol: s.symbol, quality: s.quality.tier, alloc, cost: round(cost, 2), qty: Number(qty.toPrecision(5)),
+    entry, tp1, gainPct: g1, proj, stop, riskPct, loss,
+    etaSL: eta1 != null ? slClock(Date.now() + eta1 * 60000) : null, etaLabel: s.targets[0].etaLabel,
+  }));
   return id;
 }
 // Sell open paper positions at TP1 (profit) or the stop (loss); spot PnL on the
@@ -1089,8 +1120,10 @@ async function managePaper(prices) {
     await pstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP1" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: round(movePct, 2), closed_at: new Date() });
     const acct = await paperAccount();
     console.log(`[paper] SELL ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash} (equity building)`);
-    const emo = hitTp ? "🎯" : "🛑";
-    await tgBroadcast(`${emo} *PAPER SELL ${t.symbol}* — ${status} (${hitTp ? "TP1" : "stop"})\nBought ${fmtUsd(t.entry_price)} → sold ${fmtUsd(exit)}  (${movePct >= 0 ? "+" : ""}${round(movePct, 2)}%)\n${pnl >= 0 ? "profit" : "loss"} *${pnl >= 0 ? "+" : ""}$${round(pnl, 2)}* on $${t.cost_usd}\n💰 Cash now *$${acct.cash}*  ·  rotating into the next best coin.`);
+    await tgBroadcast(fmtPaperSell({
+      symbol: t.symbol, win: hitTp, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2),
+      pnl: round(pnl, 2), balance: round(settings.capitalUsd + acct.realized, 2), realized: acct.realized,
+    }));
   }
 }
 
@@ -1327,26 +1360,31 @@ const PROPOSE_COOLDOWN = 3 * 3600_000;
 const TF_LABEL = { "15m": "15-min", "1h": "1-Hour", "4h": "4-Hour", "1d": "Daily" };
 function slNow() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
 const WIN_LINE = { OPEN: "✅ *ENTER NOW* — price is in the zone", WAIT: "⏳ Wait for a pullback into the zone", CHASE: "⚠️ Extended — only on a small pullback", CLOSED: "⛔ Missed — wait for the next setup" };
-// A clean signal card for Telegram, with 20x-leverage profit/loss projections.
+// Shared, consistent footer + disclaimers so every message reads the same way.
+const TG_FOOTER = "📊 _Trade smart. Manage risk. Follow the system._";
+const DISC_PAPER = "⚠️ _Paper trade for demonstration purposes. Crypto markets are volatile; no profit is guaranteed._";
+const DISC_SIGNAL = "⚠️ _Not financial advice. Crypto markets are volatile — manage your risk._";
+// A clean, structured signal card for Telegram, with leverage profit/loss projections.
 function fmtSignalCard(s) {
   const long = s.direction === "LONG";
   const dot = long ? "🟢" : "🔴";
   const pos = settings.positionUsd, lev = Math.max(1, settings.leverage), notional = pos * lev;
   const proj = (pct) => round((notional * pct) / 100, 2); // $ move on the leveraged notional
   const tvLink = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}${QUOTE}`;
-  const tps = s.targets.map((t, i) => `   *TP${i + 1}*  ${fmtUsd(t.priceUsd)}  (+${t.gainPct}%)  ${t.etaLabel}  →  *+$${proj(t.gainPct)}*`).join("\n");
+  const tps = s.targets.map((t, i) => ` ${i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} TP${i + 1}  ${fmtUsd(t.priceUsd)}  (+${t.gainPct}%)  ~${t.etaLabel} → *+$${proj(t.gainPct)}*`).join("\n");
   const liqPct = round(100 / lev, 1);
-  return `${dot} *${s.direction}  ${s.symbol}/${QUOTE}*   ·  ${TF_LABEL[s.tf] || s.tf}\n`
-    + `🔥 Confidence *${s.confidence}%*  ·  ${s.quality?.tier || "-"}  ·  ${marketRegime.tier}\n`
-    + `🕐 fresh as of ${slNow()} · now ${fmtUsd(s.priceUsd)}\n`
+  return `${dot} *${s.direction} SIGNAL — ${s.symbol}/${QUOTE}*\n`
+    + `💎 ${s.quality?.tier || "-"} | ${TF_LABEL[s.tf] || s.tf} | ${s.confidence}%  ·  ${marketRegime.tier}\n`
+    + `🕐 Fresh as of ${slNow()} · now ${fmtUsd(s.priceUsd)}\n`
     + `${(WIN_LINE[s.entry.window] || "")}\n\n`
-    + `📍 *Entry Zone*\n   ${fmtUsd(s.entry.low)}  –  ${fmtUsd(s.entry.high)}\n\n`
-    + `🛑 *Stop Loss*\n   ${fmtUsd(s.stop.priceUsd)}  (-${s.stop.riskPct}%)   →  *-$${proj(s.stop.riskPct)}*\n\n`
-    + `🎯 *Targets*  _(profit on $${pos} at ${lev}x = $${notional} notional)_\n${tps}\n\n`
-    + `⏱ ETAs are estimates from recent volatility.\n`
-    + `⚠️ At ${lev}x a ~${liqPct}% move against you = *liquidation*. The stop is set tighter than that.\n\n`
+    + `📍 *ENTRY ZONE:* ${fmtUsd(s.entry.low)} – ${fmtUsd(s.entry.high)}\n\n`
+    + `🎯 *TAKE PROFIT*  _(on $${pos} at ${lev}x = $${notional})_\n${tps}\n\n`
+    + `🛑 *STOP LOSS:* ${fmtUsd(s.stop.priceUsd)}\n`
+    + `📉 Risk: -${s.stop.riskPct}% → *-$${proj(s.stop.riskPct)}*\n\n`
+    + `⚠️ At ${lev}x, a ~${liqPct}% move against you = liquidation (the stop is tighter).\n`
     + `✅ *Why:* ${(s.reasons || []).slice(0, 4).join(", ")}\n`
-    + `[📈 Open chart](${tvLink})`;
+    + `[📈 Open chart](${tvLink})\n\n`
+    + `${TG_FOOTER}\n\n${DISC_SIGNAL}`;
 }
 // One-line compact row for the /signals list (mirrors a website signal card).
 function fmtSignalRow(s) {
@@ -1402,9 +1440,13 @@ async function maybeAlertTp1(row, upd) {
   if (!a || a.alerted) return;
   if (!(upd.tp1_hit || upd.status === "WIN")) return;
   a.alerted = true;
-  const msg = `🎯 *${row.symbol} ${row.direction}* hit *TP1*!\n`
-    + `Entry ${fmtUsd(row.entry_mid)} → TP1 ${fmtUsd(row.tp1)} (+${a.gain1}%)\n`
-    + `💰 On *$${a.pos}* at *${a.lev || settings.leverage}x* that's *+$${a.profit}* profit. Closed at TP1 as planned. ✅`;
+  const msg = `🎯 *TP1 HIT — ${row.symbol}*\n`
+    + `✅ Target reached | Win\n\n`
+    + `🪙 Entry: ${fmtUsd(row.entry_mid)}\n`
+    + `💰 TP1: ${fmtUsd(row.tp1)} (+${a.gain1}%)\n`
+    + `📈 Profit: *+$${a.profit}* on $${a.pos} at ${a.lev || settings.leverage}x\n\n`
+    + `Closed at TP1 as planned.\n\n`
+    + `${TG_FOOTER}\n\n${DISC_SIGNAL}`;
   bot.sendMessage(a.chatId, msg, { parse_mode: "Markdown" }).catch(() => {});
 }
 function startTelegram() {
@@ -1545,4 +1587,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, openPaper, managePaper, paperAccount, paperScore, paperEligible, fillPaper, pstore, settings };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperScore, paperEligible, fillPaper, pstore, settings };
