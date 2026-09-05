@@ -77,18 +77,20 @@
     <!-- PAPER TRADING TAB -->
     <div id="tab-paper" class="hidden">
       <div class="mb-3 rounded-lg border border-edge bg-panel/50 px-3 py-2 text-xs text-slate-400">
-        <b class="text-slate-300">Built-in paper trading</b> — the app auto-trades every ≥95% signal at <b>real live prices</b> with your margin & leverage, closes at TP1 or the stop, and tracks a virtual balance. No exchange, no API keys, no proxy. Runs 24/7. <b class="text-amber-300">Fake money</b> — for learning and proving the strategy.
+        <b class="text-slate-300">Realistic spot paper trading.</b> A fixed pot of virtual cash buys <b>$/trade</b> of a <b>good coin</b> (Blue-chip / Solid, ≥95%) at the <b>real live price</b>, sells at <b>TP1</b> (profit) or the <b>stop</b> (loss), then rotates the freed cash into the <b>next best coin</b>. Long-only, no leverage — exactly like a real spot account. <b class="text-amber-300">Fake money</b>, 24/7, no exchange/keys/proxy.
       </div>
-      <div id="paper-cards" class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6"></div>
+      <div id="paper-cards" class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"></div>
       <div class="mb-4 flex flex-wrap items-center gap-3">
-        <label class="flex items-center gap-2 text-sm text-slate-300"><input id="paper-on" type="checkbox" class="h-4 w-4" /> <b>Auto paper-trade</b> ≥95% signals</label>
+        <label class="flex items-center gap-2 text-sm text-slate-300"><input id="paper-on" type="checkbox" class="h-4 w-4" /> <b>Auto-trade</b> good ≥95% coins</label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">Capital $ <input id="paper-cap" type="number" min="10" step="10" value="200" class="w-24 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
+        <label class="flex items-center gap-1 text-sm text-slate-300">$ / trade <input id="paper-pos" type="number" min="1" step="5" value="20" class="w-20 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <label class="flex items-center gap-1 text-sm text-slate-300">Max open <input id="paper-max" type="number" min="1" max="20" value="5" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
         <button id="paper-save" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">Save</button>
         <button id="paper-reset" class="ml-auto rounded-lg border border-edge bg-panel px-3 py-1.5 text-sm text-rose-300 hover:bg-edge">Reset account</button>
         <span id="paper-status" class="text-xs"></span>
       </div>
       <div class="mb-4 card p-4">
-        <h3 class="mb-2 text-sm font-semibold text-slate-300">Open positions</h3>
+        <h3 class="mb-2 text-sm font-semibold text-slate-300">Open positions <span class="text-xs font-normal text-slate-500">(holdings — sold automatically at TP1 or the stop)</span></h3>
         <div class="overflow-x-auto"><table class="w-full text-sm" id="paper-open"></table></div>
       </div>
       <div class="card p-4">

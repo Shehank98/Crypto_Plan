@@ -166,26 +166,35 @@ market-data scanner and the testnet trading calls.
 Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `POST /api/proxy/test`,
 `GET /api/testnet/trades`.
 
-## Paper trading (built-in — no exchange, no keys, no proxy)
+## Paper trading (built-in spot broker — no exchange, no keys, no proxy)
 
-The **📝 Paper Trading** tab runs a simulated broker inside the app. When a signal scores
-**≥95%**, it "opens" a position at the **real live price** using your **margin × leverage**,
-then closes it at **TP1** (profit) or the **stop** (loss) — all tracked against a **virtual
-balance** that starts at your `CAPITAL_USD`. It runs **24/7** with nothing to configure and
-nothing to break: no Binance, no API keys, no proxy, no geo-block.
+The **📝 Paper Trading** tab simulates a **real spot account**: a fixed pot of virtual cash
+(`CAPITAL_USD`, e.g. $200) that **buys good coins and rotates**. It runs **24/7** with nothing to
+configure and nothing to break: no Binance, no API keys, no proxy, no geo-block.
 
-- **Sizing:** `POSITION_USD` is the margin per trade, `LEVERAGE` multiplies it into the notional.
-  A +2% move to TP1 at $20 × 20x = **+$8**; the stop is capped at your margin (a liquidation
-  can't lose more than you put in).
-- **Both directions:** longs and shorts (it's simulated, so no spot-only limit), gated by the
-  same quality / liquidity / market-regime filters as the rest of the engine.
-- **Limits:** at most `PAPER_MAX_OPEN` positions at once, one per coin+direction.
-- **Telegram:** if the bot is linked, you get a message when a paper trade **opens** and when it
-  **closes** (with the running balance).
-- **Reset** any time from the tab to return to your starting capital.
+How each trade works — exactly like a real spot account:
 
-It's **fake money** — for learning and proving the strategy before you risk anything real. This
-is the recommended way to see the signals auto-trade when Binance isn't available in your region.
+1. A signal scores **≥95%** on a **good coin** (Blue-chip / Solid quality, liquid, market not
+   risk-off).
+2. It **buys** `PAPER_POSITION_USD` of it at the **real live price** — the tab shows the **$ size**
+   and the **coin quantity** you'd hold.
+3. That cash is now **invested** (free cash drops). You can hold at most `PAPER_MAX_OPEN` coins.
+4. It **sells** at **TP1** (profit) or the **stop** (loss). The cash **plus profit** returns to
+   free cash.
+5. On the next scan the freed cash **rotates into the next best coin** — highest-confidence
+   qualifying signal you're not already holding.
+
+- **Long-only, no leverage** — spot can only buy, so P/L is the plain % move on the amount
+  invested (a +3% winner on $20 = **+$0.60**). No liquidations.
+- **The account:** *Equity = free cash + live value of coins held*. *Growth* shows how the $200
+  is doing; *Realized PnL* is banked profit; *Win rate* is your real edge.
+- **Telegram:** if the bot is linked, you get a message on every **buy** and **sell** (with the
+  running cash balance).
+- **Settings (in the tab):** starting **Capital $**, **$ / trade**, **Max open**. **Reset** any
+  time to start the account fresh.
+
+It's **fake money** — for learning and proving the strategy before you risk anything real, and
+the recommended way to see the signals auto-trade when Binance isn't available in your region.
 
 Endpoints: `GET /api/paper/trades`, `POST /api/paper/reset` (settings via `POST /api/settings`).
 
