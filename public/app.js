@@ -807,12 +807,17 @@ async function loadPaper() {
   if ($("paper-goal-usd") && p.goalUsd != null) $("paper-goal-usd").value = p.goalUsd;
   if ($("paper-eta") && p.maxEtaMin != null) $("paper-eta").value = p.maxEtaMin;
   const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
-  // Goal progress bar toward the $ target.
-  if ($("paper-goal") && p.goalUsd) {
+  // DAILY goal progress bar (resets at SL midnight). Trading continues past it.
+  const d = p.daily;
+  if ($("paper-goal") && p.goalUsd && d) {
     const pct = Math.max(0, Math.min(100, p.goalPct || 0));
-    const done = p.realizedUsd >= p.goalUsd;
+    const done = d.reached;
+    let right, note = "";
+    if (done) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}  ✅ reached — banking extra`; }
+    else if (d.net < 0) { right = `${d.net >= 0 ? "+" : ""}$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-amber-400">🔻 Recovering a stop-loss — need +$${round(d.remaining, 2)} more today; the next good trades cover it.</div>`; }
+    else { right = `+$${d.net} / $${p.goalUsd}`; note = `<div class="mt-1 text-xs text-slate-500">+$${round(d.remaining, 2)} to go${d.lossToRecover > 0 ? ` · covering -$${d.lossToRecover} of stops today` : ""}. Keeps trading after the goal.</div>`; }
     $("paper-goal").classList.remove("hidden");
-    $("paper-goal").innerHTML = `<div class="mb-1 flex justify-between"><span>🎯 Goal: bank <b>$${p.goalUsd}</b> profit</span><span class="${g(p.realizedUsd)}">${p.realizedUsd >= 0 ? "+" : ""}$${p.realizedUsd} / $${p.goalUsd}${done ? "  ✅ reached!" : ""}</span></div><div class="h-2 w-full overflow-hidden rounded bg-ink"><div class="h-full ${done ? "bg-emerald-500" : "bg-indigo-500"}" style="width:${pct}%"></div></div>`;
+    $("paper-goal").innerHTML = `<div class="mb-1 flex justify-between"><span>🎯 Today's goal: <b>$${p.goalUsd}/day</b> <span class="text-slate-500">(resets midnight SL · ${d.wins}W-${d.losses}L)</span></span><span class="${g(d.net)}">${right}</span></div><div class="h-2 w-full overflow-hidden rounded bg-ink"><div class="h-full ${done ? "bg-emerald-500" : "bg-indigo-500"}" style="width:${pct}%"></div></div>${note}`;
     $("paper-goal").style.borderColor = done ? "rgb(16 185 129)" : "";
   }
   const card = (l, v, cls) => `<div class="rounded-lg border border-edge bg-panel px-3 py-2"><div class="text-[11px] uppercase text-slate-500">${l}</div><div class="text-lg font-semibold ${cls || "text-white"}">${v}</div></div>`;

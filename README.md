@@ -189,9 +189,13 @@ How each trade works — exactly like a real spot account:
    free cash.
 5. On the next scan the freed cash **rotates into the next best coin** by the ROI score.
 
-**Goal + time controls:** set a **profit goal** (`PAPER_GOAL_USD`, default $10) — a progress bar
-tracks realized profit toward it. Optionally cap **Max TP1 wait** (`PAPER_MAX_ETA_MIN`) to only
-take setups expected to hit TP1 within N minutes (0 = no cap).
+**Daily goal + loss recovery:** the goal (`PAPER_GOAL_USD`, default **$10/day**) is a **daily
+target measured on net profit** and it **resets at SL midnight**. Trading does **not** stop when
+the goal is reached — it keeps compounding ("banking extra"). Losses are **netted in**: a $1
+stop-loss raises the day's needed profit to $11, so the next good trades **cover the loss** before
+the day counts as green. The progress bar shows today's net, W-L, and how much is left (or the
+amount being recovered). Optionally cap **Max TP1 wait** (`PAPER_MAX_ETA_MIN`) to only take
+setups expected to hit TP1 within N minutes (0 = no cap).
 
 - **Long-only, no leverage** — spot can only buy, so P/L is the plain % move on the amount
   invested (a +3% winner on $20 = **+$0.60**). No liquidations.

@@ -1022,6 +1022,20 @@ async function paperAccount() {
   const wins = closed.filter((t) => t.status === "WIN").length, losses = closed.filter((t) => t.status === "LOSS").length;
   return { start: settings.capitalUsd, realized: round(realized, 2), invested: round(invested, 2), cash: round(settings.capitalUsd + realized - invested, 2), wins, losses, closed: closed.length };
 }
+// YYYY-MM-DD in Sri Lanka time (a "trading day" boundary at SL midnight).
+function slDateStr(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
+// TODAY's net result (wins minus losses). The goal is a DAILY target: trading
+// keeps going past it, and any stop-loss is netted so the next good trades cover it.
+async function paperDaily() {
+  const rows = await pstore.all(5000);
+  const today = slDateStr(Date.now());
+  const todays = rows.filter((t) => (t.status === "WIN" || t.status === "LOSS") && t.closed_at && slDateStr(new Date(t.closed_at).getTime()) === today);
+  const net = todays.reduce((a, t) => a + (Number(t.pnl_usd) || 0), 0);
+  const wins = todays.filter((t) => t.status === "WIN").length, losses = todays.filter((t) => t.status === "LOSS").length;
+  const target = settings.paperGoalUsd;
+  const lossToRecover = round(Math.max(0, todays.filter((t) => t.status === "LOSS").reduce((a, t) => a - (Number(t.pnl_usd) || 0), 0)), 2);
+  return { date: today, net: round(net, 2), wins, losses, trades: todays.length, target, remaining: round(Math.max(0, target - net), 2), reached: net >= target, lossToRecover };
+}
 async function tgBroadcast(text) { if (!bot || chats.size === 0) return; for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", disable_web_page_preview: true }).catch(() => {}); }
 // Format an absolute time (ms) as HH:MM Sri Lanka time.
 function slClock(ms) { return new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(11, 16) + " SL"; }
@@ -1041,11 +1055,19 @@ function fmtPaperBuy(o) {
 }
 function fmtPaperSell(o) {
   const sd = (n) => (n >= 0 ? "+$" : "-$") + Math.abs(n);   // signed dollars: -$0.65, +$0.65
+  const d = o.day;
+  let dayLine = "";
+  if (d) {
+    if (d.reached) dayLine = `🏆 *Daily goal reached!* Today: ${sd(d.net)} (target $${d.target}). Banking extra on top.\n`;
+    else if (d.net < 0) dayLine = `🔻 *Recovering:* today ${sd(d.net)} — need *+$${round(d.remaining, 2)}* more to hit the $${d.target} goal. Hunting a good setup to cover it.\n`;
+    else dayLine = `📅 *Today:* ${sd(d.net)} / $${d.target} goal — *+$${round(d.remaining, 2)}* to go.${o.win ? "" : d.lossToRecover > 0 ? ` (covering -$${d.lossToRecover})` : ""}\n`;
+  }
   return `${o.win ? "🎯" : "🛑"} *PAPER SELL — ${o.symbol}*\n`
     + `${o.win ? "✅ TP1 HIT | Win" : "❌ STOP LOSS | Loss"}\n\n`
     + `💵 Bought: $${o.cost} @ ${fmtUsd(o.entry)}\n`
     + `${o.win ? "💰" : "💸"} Sold: ${fmtUsd(o.exit)}  (${o.movePct >= 0 ? "+" : ""}${o.movePct}%)\n`
     + `${o.win ? "📈 Profit" : "📉 Loss"}: *${sd(o.pnl)}*\n\n`
+    + dayLine
     + `🏦 Balance: *$${o.balance}*  ·  Realized: ${sd(o.realized)}\n`
     + `🔄 Rotating into the next best setup.\n\n`
     + `${TG_FOOTER}\n\n${DISC_PAPER}`;
@@ -1120,9 +1142,10 @@ async function managePaper(prices) {
     await pstore.close(t.id, { status, exit_price: rp(exit), exit_reason: hitTp ? "TP1" : "STOP", pnl_usd: round(pnl, 2), pnl_pct: round(movePct, 2), closed_at: new Date() });
     const acct = await paperAccount();
     console.log(`[paper] SELL ${t.symbol} ${status} PnL $${pnl.toFixed(2)} → cash $${acct.cash} (equity building)`);
+    const day = await paperDaily();
     await tgBroadcast(fmtPaperSell({
       symbol: t.symbol, win: hitTp, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2),
-      pnl: round(pnl, 2), balance: round(settings.capitalUsd + acct.realized, 2), realized: acct.realized,
+      pnl: round(pnl, 2), balance: round(settings.capitalUsd + acct.realized, 2), realized: acct.realized, day,
     }));
   }
 }
@@ -1321,8 +1344,9 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
   const holdingsValue = open.reduce((acc, t) => acc + (t.marketValueUsd != null ? t.marketValueUsd : (Number(t.cost_usd) || 0)), 0);
   const equity = a.cash + holdingsValue;                                     // cash + live value of coins held
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
-  const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((a.realized / goal) * 100, 0) : null;
-  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, goalUsd: goal, goalPct, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  const day = await paperDaily();
+  const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null; // progress is DAILY net
+  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
 
@@ -1587,4 +1611,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperScore, paperEligible, fillPaper, pstore, settings };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, settings };
