@@ -563,6 +563,27 @@ function computeRegime(signals) {
   return { tier, breadthPct, longs, shorts, total, btc: btcDir, at: Date.now() };
 }
 
+// Re-judge a signal's entry window against a LIVE price (pure - returns a new
+// object). The zone/stop/targets are built from candle data, but whether it's
+// still enterable must be decided by the current market price, or a stale/fast-
+// moving signal can show "enter" at a price the market has already left.
+function reclassifyEntry(s, P) {
+  if (!s || s.error || !s.entry || !s.targets || P == null || !(P > 0)) return s;
+  const long = s.direction === "LONG";
+  const low = s.entry.low, high = s.entry.high, tp1 = s.targets[0].priceUsd, stop = s.stop.priceUsd;
+  const rrNow = Math.abs(P - stop) > 0 ? round(Math.abs(tp1 - P) / Math.abs(P - stop), 2) : null;
+  const pastTp1 = long ? P >= tp1 : P <= tp1;
+  const inZone = P >= low && P <= high;
+  const beyondZone = long ? P > high : P < low;   // extended past the pullback zone
+  const belowZone = long ? P < low : P > high;     // deep in the pullback (favorable)
+  let window, enterMsg;
+  if (pastTp1) { window = "CLOSED"; enterMsg = "Price already reached TP1 - too late, wait for the next setup."; }
+  else if (inZone) { window = "OPEN"; enterMsg = long ? "In the buy zone." : "In the sell zone."; }
+  else if (belowZone) { window = "OPEN"; enterMsg = long ? `Price is below the zone (near ${rp(low)}) - a strong pullback entry while ${rp(stop)} holds.` : `Price is above the zone - a strong short entry while ${rp(stop)} holds.`; }
+  else if (beyondZone) { window = rrNow != null && rrNow >= 1.2 ? "CHASE" : "CLOSED"; enterMsg = window === "CHASE" ? `Extended above the zone - only on a small pullback toward ${rp(high)}, don't chase.` : `Price ran past the entry zone (now ${rp(P)}, zone tops at ${rp(high)}) - wait for a pullback or the next setup.`; }
+  else { window = "WAIT"; enterMsg = "Wait for price to reach the entry zone."; }
+  return { ...s, priceUsd: rp(P), entry: { ...s.entry, window, rrNow, enterMsg, status: inZone ? "READY" : (long ? "WAIT for pullback to entry" : "WAIT for bounce to entry") } };
+}
 const scanCache = {};
 let scanning = false;
 async function scanMarket(tf, force) {
@@ -582,7 +603,7 @@ async function scanMarket(tf, force) {
     for (let i = 0; i < universe.length; i += 8) {
       const batch = universe.slice(i, i + 8);
       const sigs = await Promise.all(batch.map((u) => signalFor(u.base, tf, fx, { htf, htfDir: htfMap ? htfMap.get(u.base) : undefined })));
-      sigs.forEach((s, j) => { if (batch[j]) { s.changePct = round(batch[j].changePct, 2); s.liquidityUsd = Math.round(batch[j].quoteVolume || 0); s.quality = qualityTier(batch[j].quoteVolume, s.indicators?.atrPct); } });
+      sigs.forEach((s, j) => { if (batch[j]) { s.changePct = round(batch[j].changePct, 2); s.liquidityUsd = Math.round(batch[j].quoteVolume || 0); s.quality = qualityTier(batch[j].quoteVolume, s.indicators?.atrPct); Object.assign(s, reclassifyEntry(s, batch[j].last)); } }); // judge the entry window against the LIVE ticker price
       results.push(...sigs);
     }
     const rank = (s) => (s.error || s.direction === "NEUTRAL" ? -1 : s.confidence);
@@ -1428,6 +1449,9 @@ app.get("/api/signals", wrap(async (req, res) => {
   // Stamp each actionable card with its live tracking outcome (status + TP hits + open R).
   const [tidx, prices] = await Promise.all([trackedIndex().catch(() => new Map()), getTickerMap().catch(() => new Map())]);
   signals = signals.map((s) => {
+    // Always show the LIVE price + re-judge the window, so a stale/cached scan
+    // can't show "enter" at a price the market has moved away from.
+    s = reclassifyEntry(s, prices.get(s.symbol));
     if (s.direction !== "LONG" && s.direction !== "SHORT") return s;
     const t = tidx.get(`${s.symbol}|${s.tf}|${s.direction}`);
     if (!t) return s;
