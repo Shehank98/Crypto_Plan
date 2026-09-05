@@ -710,6 +710,7 @@ async function loadSettings() {
       : '<span class="text-amber-400">Telegram not linked - set TELEGRAM_BOT_TOKEN and message your bot /start once.</span>';
     $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
     $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
+    if ($("set-proxytn")) $("set-proxytn").checked = s.proxyTestnet !== false;
     let note = "";
     if (s.lastError) note += `<span class="text-rose-400">⚠ ${s.lastError}</span><br>`;
     if (!s.durableSettings) note += '<span class="text-amber-400">Note: no database - keys reset on redeploy. Set DATABASE_URL to persist.</span>';
@@ -737,6 +738,7 @@ async function loadTestnetTrades() {
 }
 async function saveSettings() {
   const body = { autoTrade: $("set-auto").checked, tradeUsd: Number($("set-usd").value) || 100, qualityOnly: $("set-quality").checked, holdThroughDips: $("set-hold").checked, regimeFilter: $("set-regime").checked, exitStyle: $("set-exit").value, tgApproval: $("set-approval").checked, positionUsd: Number($("set-position").value) || 20, leverage: Number($("set-leverage").value) || 20, capitalUsd: Number($("set-capital").value) || 200 };
+  if ($("set-proxytn")) body.proxyTestnet = $("set-proxytn").checked;
   const k = $("set-key").value.trim(), sec = $("set-secret").value.trim(), px = $("set-proxy").value.trim();
   if (k) body.apiKey = k; if (sec) body.apiSecret = sec; if (px) body.proxyUrl = px;
   $("set-status").textContent = "Saving…";

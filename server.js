@@ -817,7 +817,8 @@ const settings = {
   autoTrade: /^(1|true|yes|on)$/i.test(process.env.AUTO_TRADE || ""),
   tradeUsd: Number(process.env.TRADE_USD || 100),
   testnetBase: process.env.BINANCE_TESTNET_BASE || "https://testnet.binance.vision",
-  proxyUrl: process.env.BINANCE_PROXY_URL || "", // route testnet calls via an allowed region
+  proxyUrl: process.env.BINANCE_PROXY_URL || "", // route market-data (and optionally testnet) via an allowed region
+  proxyTestnet: !/^(0|false|no|off)$/i.test(process.env.PROXY_TESTNET || "true"), // also send testnet trading through the proxy (off = direct)
   qualityOnly: !/^(0|false|no|off)$/i.test(process.env.QUALITY_ONLY || "true"), // only trade blue-chip/solid coins
   holdThroughDips: /^(1|true|yes|on)$/i.test(process.env.HOLD_THROUGH_DIPS || ""), // no stop: hold a sideways spot until TP1
   regimeFilter: !/^(0|false|no|off)$/i.test(process.env.REGIME_FILTER || "true"), // don't auto-buy when the market is risk-off
@@ -856,20 +857,28 @@ function proxyCfg(url) {
     return { proxy: { protocol: u.protocol.replace(":", ""), host: u.hostname, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80), auth: u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : undefined } };
   } catch (e) { return {}; }
 }
-// Human-friendly Binance error, with guidance for the geo-block case.
+// Human-friendly Binance error, with guidance for the common cases.
 function niceTnError(e) {
+  const code = e.response?.data?.code;
   const msg = e.response?.data?.msg || e.message || "request failed";
   if (/restricted location|Eligibility|restricted/i.test(msg)) return "Binance is geo-blocking this server's region. Add a Proxy URL (Settings) that exits in an allowed region, or host the app in an allowed region.";
+  if (code === -2015 || /Invalid API-key, IP, or permissions/i.test(msg))
+    return "Binance rejected the credentials (-2015). Fix, in order: (1) regenerate a fresh HMAC key at testnet.binance.vision — testnet resets periodically and kills old keys; (2) re-paste BOTH the key AND the secret (a wrong secret looks like this); (3) create the key UNRESTRICTED (no IP whitelist), since requests exit via the proxy IP — or turn OFF 'route testnet through proxy' to send it direct.";
+  if (code === -1022 || /Signature for this request/i.test(msg)) return "Signature rejected (-1022). The secret doesn't match the key — re-paste both.";
+  if (code === -1021 || /Timestamp for this request/i.test(msg)) return "Clock out of sync (-1021). The server time drifted; retry, and if it persists the host clock needs NTP.";
   return msg;
 }
 
-async function tnPublic(pathname, params) { const r = await http.get(settings.testnetBase + pathname, { params, ...proxyCfg() }); return r.data; }
+// Testnet (testnet.binance.vision) is usually reachable WITHOUT a proxy. Routing
+// it via the proxy can trip an IP-restricted key, so it's toggleable.
+function tnProxyCfg() { return settings.proxyTestnet ? proxyCfg() : {}; }
+async function tnPublic(pathname, params) { const r = await http.get(settings.testnetBase + pathname, { params, ...tnProxyCfg() }); return r.data; }
 async function tnSigned(method, pathname, params = {}) {
   if (!tnConfigured()) throw new Error("Testnet API keys not set");
   const query = new URLSearchParams({ ...params, timestamp: Date.now(), recvWindow: 5000 }).toString();
   const signature = crypto.createHmac("sha256", settings.apiSecret).update(query).digest("hex");
   const url = `${settings.testnetBase}${pathname}?${query}&signature=${signature}`;
-  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey }, ...proxyCfg() });
+  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey }, ...tnProxyCfg() });
   return r.data;
 }
 async function tnAccount() { return tnSigned("get", "/api/v3/account"); }
@@ -1047,7 +1056,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1066,6 +1075,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
   if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
   if (typeof b.proxyUrl === "string") settings.proxyUrl = normalizeProxy(b.proxyUrl); // accepts Webshare host:port:user:pass too
+  if (typeof b.proxyTestnet === "boolean") settings.proxyTestnet = b.proxyTestnet;
   if (b.clearKeys === true) { settings.apiKey = ""; settings.apiSecret = ""; settings.autoTrade = false; }
   lastTnError = null;
   await saveSettings();
