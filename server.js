@@ -919,6 +919,16 @@ async function saveSettings() {
   if (!useDb) return;
   try { await pool.query("INSERT INTO app_settings (k,v) VALUES ('trade',$1) ON CONFLICT (k) DO UPDATE SET v=$1", [JSON.stringify(settings)]); } catch (e) { console.warn("[testnet] settings save:", e.message); }
 }
+// Remember which Telegram chats to message, so a restart/redeploy doesn't lose
+// them (otherwise you'd have to send /start again every deploy).
+async function loadChats() {
+  if (!useDb) return;
+  try { const { rows } = await pool.query("SELECT v FROM app_settings WHERE k='tg_chats'"); if (rows[0]) { for (const id of JSON.parse(rows[0].v)) chats.add(String(id)); console.log(`[telegram] restored ${chats.size} chat(s) from DB`); } } catch (e) { /* table may not exist yet */ }
+}
+async function saveChats() {
+  if (!useDb) return;
+  try { await pool.query("INSERT INTO app_settings (k,v) VALUES ('tg_chats',$1) ON CONFLICT (k) DO UPDATE SET v=$1", [JSON.stringify([...chats])]); } catch (e) { /* non-fatal */ }
+}
 
 // Place the buy when a >=95% LONG signal is logged.
 async function maybeAutoTrade(s) {
@@ -1056,7 +1066,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1251,7 +1261,7 @@ function startTelegram() {
   try {
     const TelegramBot = require("node-telegram-bot-api");
     bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-    bot.on("message", (m) => chats.add(m.chat.id));
+    bot.on("message", (m) => { const had = chats.has(String(m.chat.id)); chats.add(String(m.chat.id)); if (!had) saveChats(); }); // remember new chats durably
     // Inline Take / Skip buttons on trade proposals.
     bot.on("callback_query", async (cq) => {
       try {
@@ -1271,7 +1281,11 @@ function startTelegram() {
       } catch (e) { console.warn("[telegram cb]", e.message); }
     });
     const help = () => TG_HELP.replace("%TF%", TF_LABEL[cmdTf] || cmdTf);
-    bot.onText(/^\/(start|help)\b/, (m) => bot.sendMessage(m.chat.id, help(), { parse_mode: "Markdown" }));
+    bot.onText(/^\/help\b/, (m) => bot.sendMessage(m.chat.id, help(), { parse_mode: "Markdown" }));
+    bot.onText(/^\/start\b/, (m) => {
+      chats.add(String(m.chat.id)); saveChats();
+      bot.sendMessage(m.chat.id, `✅ *Linked!* This chat will now get signals 24/7.\nYour chat id: \`${m.chat.id}\`  (save it as TELEGRAM_CHAT_ID so it survives redeploys)\n\n` + help(), { parse_mode: "Markdown" });
+    });
     // /signals — compact, website-style list of setups you can still enter (OPEN + WAIT).
     bot.onText(/^\/signals\b/, async (m) => {
       try {
@@ -1369,6 +1383,7 @@ function startLoops() {
 async function boot() {
   try { await initStore(); } catch (e) { console.error("[store] init failed:", e.message); }
   await loadSettings().catch(() => {});
+  await loadChats().catch(() => {}); // restore Telegram chats so /start survives redeploys
   if (tnConfigured()) console.log(`[testnet] keys loaded (auto-trade ${settings.autoTrade ? "ON" : "off"}, $${settings.tradeUsd}/trade)`);
   app.listen(PORT, () => console.log(`[server] signals on ${PORT}`));
   startTelegram();

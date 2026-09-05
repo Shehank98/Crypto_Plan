@@ -706,8 +706,10 @@ async function loadSettings() {
     if (s.leverage != null) $("set-leverage").value = s.leverage;
     if (s.capitalUsd != null) $("set-capital").value = s.capitalUsd;
     $("set-tg").innerHTML = s.telegramReady
-      ? '<span class="text-emerald-400">✓ Telegram connected</span>'
-      : '<span class="text-amber-400">Telegram not linked - set TELEGRAM_BOT_TOKEN and message your bot /start once.</span>';
+      ? `<span class="text-emerald-400">✓ Telegram connected (${s.telegramChats} chat${s.telegramChats === 1 ? "" : "s"})</span>`
+      : !s.telegramTokenSet
+        ? '<span class="text-rose-400">✗ No bot token. Set <b>TELEGRAM_BOT_TOKEN</b> in Railway → Variables, then redeploy.</span>'
+        : '<span class="text-amber-400">Bot is on, but no chat linked. Open your bot in Telegram and send <b>/start</b> once.</span>';
     $("set-key").placeholder = s.configured ? `saved: ${s.keyMasked} (enter to replace)` : "Testnet API key";
     $("set-proxy").placeholder = s.proxySet ? "saved (enter to replace, or blank to keep)" : "http://user:pass@host:port  (optional)";
     if ($("set-proxytn")) $("set-proxytn").checked = s.proxyTestnet !== false;
