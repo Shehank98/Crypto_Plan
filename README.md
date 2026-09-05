@@ -166,6 +166,29 @@ market-data scanner and the testnet trading calls.
 Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `POST /api/proxy/test`,
 `GET /api/testnet/trades`.
 
+## Paper trading (built-in — no exchange, no keys, no proxy)
+
+The **📝 Paper Trading** tab runs a simulated broker inside the app. When a signal scores
+**≥95%**, it "opens" a position at the **real live price** using your **margin × leverage**,
+then closes it at **TP1** (profit) or the **stop** (loss) — all tracked against a **virtual
+balance** that starts at your `CAPITAL_USD`. It runs **24/7** with nothing to configure and
+nothing to break: no Binance, no API keys, no proxy, no geo-block.
+
+- **Sizing:** `POSITION_USD` is the margin per trade, `LEVERAGE` multiplies it into the notional.
+  A +2% move to TP1 at $20 × 20x = **+$8**; the stop is capped at your margin (a liquidation
+  can't lose more than you put in).
+- **Both directions:** longs and shorts (it's simulated, so no spot-only limit), gated by the
+  same quality / liquidity / market-regime filters as the rest of the engine.
+- **Limits:** at most `PAPER_MAX_OPEN` positions at once, one per coin+direction.
+- **Telegram:** if the bot is linked, you get a message when a paper trade **opens** and when it
+  **closes** (with the running balance).
+- **Reset** any time from the tab to return to your starting capital.
+
+It's **fake money** — for learning and proving the strategy before you risk anything real. This
+is the recommended way to see the signals auto-trade when Binance isn't available in your region.
+
+Endpoints: `GET /api/paper/trades`, `POST /api/paper/reset` (settings via `POST /api/settings`).
+
 ## Ask-before-you-trade on Telegram
 
 Turn on **Settings → "Ask me on Telegram before each trade"** and set your **$ per trade**,

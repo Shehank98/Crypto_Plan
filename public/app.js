@@ -674,16 +674,18 @@ function drawTrackTf() {
   seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
-  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Paper Trading" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
   $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     activeTab = b.dataset.tab;
     $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
     $("tab-track").classList.toggle("hidden", activeTab !== "track");
+    $("tab-paper").classList.toggle("hidden", activeTab !== "paper");
     $("tab-forex").classList.toggle("hidden", activeTab !== "forex");
     $("tab-settings").classList.toggle("hidden", activeTab !== "settings");
     drawTabs();
     if (activeTab === "track") loadTrack();
+    if (activeTab === "paper") loadPaper();
     if (activeTab === "settings") loadSettings();
     if (activeTab === "forex") loadForex();
   }));
@@ -792,6 +794,41 @@ async function api2(p, body) {
   const b = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
   return b;
+}
+
+// ---------- Paper trading ----------
+async function loadPaper() {
+  let p;
+  try { p = await api("/api/paper/trades"); } catch (e) { return; }
+  if ($("paper-on")) $("paper-on").checked = !!p.enabled;
+  if ($("paper-max")) $("paper-max").value = p.maxOpen;
+  const g = (v) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-white");
+  const card = (l, v, cls) => `<div class="rounded-lg border border-edge bg-panel px-3 py-2"><div class="text-[11px] uppercase text-slate-500">${l}</div><div class="text-lg font-semibold ${cls || "text-white"}">${v}</div></div>`;
+  $("paper-cards").innerHTML = [
+    card("Balance", "$" + p.balanceUsd),
+    card("Equity (live)", "$" + p.equityUsd, g(p.equityUsd - p.startUsd)),
+    card("Realized PnL", (p.realizedUsd >= 0 ? "+" : "") + "$" + p.realizedUsd, g(p.realizedUsd)),
+    card("Unrealized", (p.unrealizedUsd >= 0 ? "+" : "") + "$" + p.unrealizedUsd, g(p.unrealizedUsd)),
+    card("Win rate", p.winRatePct == null ? "-" : p.winRatePct + "%"),
+    card("Open / W-L", `${p.open.length} · ${p.wins}-${p.losses}`),
+  ].join("");
+  $("paper-open").innerHTML = p.open.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Dir</th><th class="text-right">Entry</th><th class="text-right">Live</th><th class="text-right">TP1</th><th class="text-right">Stop</th><th class="text-right">uPnL $</th><th class="text-right">uPnL %</th><th>Opened (SL)</th></tr></thead><tbody>${p.open.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 ${x.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}">${x.direction}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${x.livePrice == null ? "-" : usd(x.livePrice)}</td><td class="py-1.5 text-right tabular-nums text-emerald-300">${usd(x.tp1)}</td><td class="py-1.5 text-right tabular-nums text-rose-300">${usd(x.stop)}</td><td class="py-1.5 text-right tabular-nums ${g(x.unrealizedUsd)}">${x.unrealizedUsd == null ? "-" : (x.unrealizedUsd >= 0 ? "+" : "") + x.unrealizedUsd}</td><td class="py-1.5 text-right tabular-nums ${g(x.unrealizedPct)}">${x.unrealizedPct == null ? "-" : (x.unrealizedPct >= 0 ? "+" : "") + x.unrealizedPct + "%"}</td><td class="py-1.5 text-xs text-slate-400">${slTime(x.opened_at)}</td></tr>`).join("")}</tbody>`
+    : `<tbody><tr><td class="py-3 text-slate-500">No open positions. A ≥95% signal opens one automatically${p.enabled ? "" : " (turn on Auto paper-trade above)"}.</td></tr></tbody>`;
+  $("paper-recent").innerHTML = p.recent.length
+    ? `<thead><tr class="text-left text-xs uppercase text-slate-500"><th>Coin</th><th>Dir</th><th class="text-right">Entry</th><th class="text-right">Exit</th><th>Result</th><th class="text-right">PnL $</th><th class="text-right">PnL %</th><th>Closed (SL)</th></tr></thead><tbody>${p.recent.map((x) => `<tr class="border-b border-edge/60"><td class="py-1.5 font-semibold">${x.symbol}</td><td class="py-1.5 ${x.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}">${x.direction}</td><td class="py-1.5 text-right tabular-nums">${usd(x.entry_price)}</td><td class="py-1.5 text-right tabular-nums">${usd(x.exit_price)}</td><td class="py-1.5 text-xs ${x.status === "WIN" ? "text-emerald-400" : "text-rose-400"}">${x.status} (${x.exit_reason})</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_usd)}">${x.pnl_usd >= 0 ? "+" : ""}${x.pnl_usd}</td><td class="py-1.5 text-right tabular-nums ${g(x.pnl_pct)}">${x.pnl_pct >= 0 ? "+" : ""}${x.pnl_pct}%</td><td class="py-1.5 text-xs text-slate-500">${slTime(x.closed_at)}</td></tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="py-3 text-slate-500">No closed trades yet.</td></tr></tbody>';
+}
+async function savePaper() {
+  try {
+    await api2("/api/settings", { paperTrading: $("paper-on").checked, paperMaxOpen: Number($("paper-max").value) || 5 });
+    $("paper-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
+    loadPaper();
+  } catch (e) { $("paper-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
+async function resetPaper() {
+  if (!confirm("Reset the paper account? This deletes all paper trades and returns the balance to your starting capital.")) return;
+  try { await api2("/api/paper/reset", {}); $("paper-status").innerHTML = '<span class="text-amber-400">Account reset.</span>'; loadPaper(); } catch (e) { /* ignore */ }
 }
 
 // ---------- Forex Bot ----------
@@ -907,6 +944,10 @@ async function init() {
   { const pt = $("proxy-test"); if (pt) pt.onclick = testProxies; }
   $("set-clear").onclick = clearKeys;
   setInterval(() => { if (activeTab === "settings") loadTestnetTrades(); }, 15000); // refresh testnet PnL
+  // Paper trading wiring
+  { const a = $("paper-save"); if (a) a.onclick = savePaper; }
+  { const a = $("paper-reset"); if (a) a.onclick = resetPaper; }
+  setInterval(() => { if (activeTab === "paper") loadPaper(); }, 15000); // refresh paper PnL live
   // Forex bot wiring
   $("fx-save").onclick = saveForex;
   $("fx-test").onclick = testForex;
