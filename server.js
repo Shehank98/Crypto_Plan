@@ -1228,7 +1228,10 @@ async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
   if (cost < 1) return;
   const { idx, t: tgt } = tpTarget(s, settings.paperTpLevel);
-  const entry = s.entry.mid, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;    // enter at the ideal zone price (like the Track Record)
+  // Fill at the LIVE price, but clamped inside the entry zone: never worse than
+  // the zone top (no chasing) and never a stale look-back price (no fake gains).
+  const entry = rp(Math.min(Math.max(s.priceUsd, s.entry.low), s.entry.high));
+  const tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
   const qty = cost / entry, eta1 = tgt.etaMin ?? null;
   const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
   const proj = round(cost * g1 / 100, 2), loss = round(cost * riskPct / 100, 2);
@@ -1346,7 +1349,9 @@ async function openFutures(s, margin) {
   const lev = Math.max(1, settings.futuresLeverage), notional = round(margin * lev, 2);
   const { idx, t: tgt } = tpTarget(s, settings.futuresTpLevel);
   const long = s.direction === "LONG";
-  const entry = s.entry.mid, tp1 = tgt.priceUsd, stop = s.stop.priceUsd;    // enter at the ideal zone price (like the Track Record)
+  // Fill at the LIVE price, clamped into the zone (no chasing, no stale fill).
+  const entry = rp(Math.min(Math.max(s.priceUsd, s.entry.low), s.entry.high));
+  const tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
   const qty = notional / entry, eta1 = tgt.etaMin ?? null;
   const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
   const proj = round(notional * g1 / 100, 2);                        // profit at TP (on notional)
