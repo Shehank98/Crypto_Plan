@@ -150,12 +150,21 @@ they reset on redeploy. You can also set `BINANCE_TESTNET_KEY` / `BINANCE_TESTNE
 `AUTO_TRADE` / `TRADE_USD` as env vars instead of using the UI. **Use testnet keys only.**
 
 **Geo-block:** Binance blocks many cloud regions ("Service unavailable from a restricted
-location"). If Test connection reports that, set a **Proxy URL** in Settings (or
-`BINANCE_PROXY_URL`, e.g. `http://user:pass@host:port`) that exits in an allowed region — the
-testnet calls are routed through it. The error message in Settings tells you when this is the
-cause.
+location"). If the scanner or Test connection reports that, set a **Proxy URL** in Settings (or
+`BINANCE_PROXY_URL`) that exits in an allowed region. The proxy is applied to **both** the
+market-data scanner and the testnet trading calls.
 
-Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `GET /api/testnet/trades`.
+- **Format:** a full URL `http://user:pass@host:port`, **or** paste Webshare's raw download line
+  `host:port:user:pass` — it's converted automatically.
+- **Test proxies** (Settings → 🧪 Test proxies): paste all your proxies (one per line) and hit
+  **Test all**. Each is checked against real Binance endpoints and shows ✅/❌ for market data,
+  the testnet host, latency, and the exit country. Click **Use this** on a working one → Save.
+  A proxy that loads **market data** is the one the scanner needs. Note Binance restricts some
+  regions (incl. UK); if all your proxies say ❌ even though they connect, pick proxies in a
+  fully-allowed country.
+
+Endpoints: `GET/POST /api/settings`, `POST /api/settings/test`, `POST /api/proxy/test`,
+`GET /api/testnet/trades`.
 
 ## Ask-before-you-trade on Telegram
 

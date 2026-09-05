@@ -174,7 +174,7 @@ async function binanceGet(pathname, params) {
   const hosts = binanceHost ? [binanceHost, ...BINANCE_HOSTS.filter((h) => h !== binanceHost)] : BINANCE_HOSTS;
   let err;
   for (const h of hosts) {
-    try { const r = await http.get(h + pathname, { params }); binanceHost = h; return r.data; }
+    try { const r = await http.get(h + pathname, { params, ...proxyCfg() }); binanceHost = h; return r.data; }
     catch (e) { err = e; }
   }
   throw err || new Error("all Binance hosts failed");
@@ -831,12 +831,28 @@ const settings = {
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
 function maskKey(k) { return k ? k.slice(0, 4) + "…" + k.slice(-4) : ""; }
+// Accept a proxy in EITHER form and return a proper URL string:
+//   - full URL:            http://user:pass@host:port
+//   - Webshare download:   host:port:user:pass   (or host:port)
+// This lets you paste Webshare's raw line straight in without converting it.
+function normalizeProxy(raw) {
+  if (!raw) return "";
+  let s = String(raw).trim();
+  if (!s) return "";
+  if (/^[a-z]+:\/\//i.test(s)) return s;               // already a URL
+  const p = s.split(":");
+  if (p.length === 4) return `http://${p[2]}:${p[3]}@${p[0]}:${p[1]}`; // host:port:user:pass
+  if (p.length === 2) return `http://${p[0]}:${p[1]}`;                 // host:port (no auth)
+  return s; // leave anything else as-is; new URL() will reject it if bad
+}
 // Binance geo-blocks some regions (incl. many cloud IPs). A proxy in an allowed
-// region routes testnet trading around it.
-function proxyCfg() {
-  if (!settings.proxyUrl) return {};
+// region routes calls around it. Pass a url to test an arbitrary proxy; defaults
+// to the saved one. Used by BOTH market-data and testnet calls.
+function proxyCfg(url) {
+  const raw = url !== undefined ? url : settings.proxyUrl;
+  if (!raw) return {};
   try {
-    const u = new URL(settings.proxyUrl);
+    const u = new URL(normalizeProxy(raw));
     return { proxy: { protocol: u.protocol.replace(":", ""), host: u.hostname, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80), auth: u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : undefined } };
   } catch (e) { return {}; }
 }
@@ -1049,7 +1065,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (b.minTrackLiquidityUsd != null && Number.isFinite(+b.minTrackLiquidityUsd)) settings.minTrackLiquidityUsd = Math.max(0, +b.minTrackLiquidityUsd);
   if (b.tradeUsd != null && Number.isFinite(+b.tradeUsd)) settings.tradeUsd = Math.max(10, +b.tradeUsd);
   if (typeof b.testnetBase === "string") settings.testnetBase = b.testnetBase.trim() || "https://testnet.binance.vision";
-  if (typeof b.proxyUrl === "string") settings.proxyUrl = b.proxyUrl.trim();
+  if (typeof b.proxyUrl === "string") settings.proxyUrl = normalizeProxy(b.proxyUrl); // accepts Webshare host:port:user:pass too
   if (b.clearKeys === true) { settings.apiKey = ""; settings.apiSecret = ""; settings.autoTrade = false; }
   lastTnError = null;
   await saveSettings();
@@ -1064,6 +1080,38 @@ app.post("/api/settings/test", wrap(async (_req, res) => {
     lastTnError = null;
     res.json({ ok: true, canTrade: a.canTrade !== false, usdtFree: usdt ? +usdt.free : 0, accountType: a.accountType });
   } catch (e) { lastTnError = niceTnError(e); res.status(400).json({ ok: false, error: lastTnError }); }
+}));
+// Test one or many proxies against REAL Binance endpoints, so you can paste all
+// 10 (URL or Webshare host:port:user:pass) and see which actually get past the
+// geo-block - without saving. Reports data + testnet reachability and exit IP.
+app.post("/api/proxy/test", wrap(async (req, res) => {
+  const list = Array.isArray(req.body?.proxies) ? req.body.proxies
+    : String(req.body?.proxies || req.body?.proxyUrl || "").split(/\r?\n/);
+  const proxies = list.map((s) => String(s).trim()).filter(Boolean).slice(0, 20);
+  if (!proxies.length) { res.status(400).json({ ok: false, error: "Paste at least one proxy (one per line)." }); return; }
+  const testOne = async (raw) => {
+    const url = normalizeProxy(raw);
+    const cfg = proxyCfg(url);
+    if (!cfg.proxy) return { proxy: raw, ok: false, error: "unparseable proxy line" };
+    const out = { proxy: raw, host: cfg.proxy.host, port: cfg.proxy.port, data: null, testnet: null, exitIp: null, exitCc: null, ms: null };
+    const t0 = Date.now();
+    // 1) Can we read Binance MARKET DATA through it? (this is what the scanner needs)
+    try { await http.get("https://data-api.binance.vision/api/v3/ticker/price", { params: { symbol: "BTC" + QUOTE }, timeout: 12000, ...cfg }); out.data = "ok"; }
+    catch (e) { out.data = "fail: " + niceTnError(e); }
+    // 2) Can we reach the TESTNET host through it? (this is what trading needs)
+    try { await http.get(settings.testnetBase + "/api/v3/ping", { timeout: 12000, ...cfg }); out.testnet = "ok"; }
+    catch (e) { out.testnet = "fail: " + niceTnError(e); }
+    // 3) Where does the proxy exit? (region matters for Binance)
+    try { const r = await http.get("http://ip-api.com/json", { timeout: 8000, ...cfg }); out.exitIp = r.data?.query || null; out.exitCc = r.data?.countryCode || null; }
+    catch (e) { /* non-fatal */ }
+    out.ms = Date.now() - t0;
+    out.ok = out.data === "ok"; // "working" = the scanner can get data
+    return out;
+  };
+  const results = [];
+  for (const p of proxies) results.push(await testOne(p)); // sequential: gentle on the target
+  const working = results.filter((r) => r.ok);
+  res.json({ ok: true, count: results.length, workingCount: working.length, results });
 }));
 app.get("/api/testnet/trades", wrap(async (_req, res) => {
   const rows = await tstore.all(100);

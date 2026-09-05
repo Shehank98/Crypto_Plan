@@ -756,6 +756,32 @@ async function testConnection() {
 async function clearKeys() {
   try { await api2("/api/settings", { clearKeys: true }); $("set-status").innerHTML = '<span class="text-amber-400">Keys cleared.</span>'; loadSettings(); } catch (e) { /* ignore */ }
 }
+// Test every pasted proxy against real Binance endpoints; show which work + let
+// you use the best one with one click.
+async function testProxies() {
+  const raw = $("proxy-list").value.trim();
+  if (!raw) { $("proxy-status").textContent = "Paste at least one proxy line."; return; }
+  const proxies = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  $("proxy-status").textContent = `Testing ${proxies.length}… (a few seconds each)`;
+  $("proxy-results").innerHTML = "";
+  try {
+    const r = await api2("/api/proxy/test", { proxies });
+    $("proxy-status").innerHTML = `<span class="${r.workingCount ? "text-emerald-400" : "text-rose-400"}">${r.workingCount}/${r.count} working for market data.</span>`;
+    $("proxy-results").innerHTML = r.results.map((x) => {
+      const ok = x.ok;
+      const badge = ok ? '<span class="text-emerald-400">✅ works</span>' : '<span class="text-rose-400">❌ blocked</span>';
+      const region = x.exitCc ? ` · ${x.exitCc}${x.exitIp ? " (" + x.exitIp + ")" : ""}` : "";
+      const detail = `data ${x.data === "ok" ? "✓" : "✗"} · testnet ${x.testnet === "ok" ? "✓" : "✗"}${x.ms != null ? " · " + x.ms + "ms" : ""}${region}`;
+      const use = ok ? ` <button data-proxy="${encodeURIComponent(x.proxy)}" class="proxy-use rounded border border-edge bg-panel px-2 py-0.5 text-[11px] hover:bg-edge">Use this</button>` : "";
+      return `<div class="rounded border border-edge bg-ink/40 px-2 py-1"><div class="flex items-center justify-between gap-2"><span class="font-mono text-[11px] text-slate-300">${(x.host || x.proxy)}:${x.port || ""}</span><span>${badge}${use}</span></div><div class="text-[11px] text-slate-500">${detail}</div></div>`;
+    }).join("");
+    document.querySelectorAll(".proxy-use").forEach((b) => b.onclick = () => {
+      $("set-proxy").value = decodeURIComponent(b.dataset.proxy);
+      $("proxy-status").innerHTML = '<span class="text-emerald-400">Filled the Proxy URL above — click Save to keep it.</span>';
+      $("set-proxy").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  } catch (e) { $("proxy-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
+}
 // POST helper
 async function api2(p, body) {
   const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -874,6 +900,7 @@ async function init() {
   $("trade-modal").onclick = (e) => { if (e.target.id === "trade-modal") { const m = $("trade-modal"); m.classList.add("hidden"); m.classList.remove("flex"); } };
   $("set-save").onclick = saveSettings;
   $("set-test").onclick = testConnection;
+  { const pt = $("proxy-test"); if (pt) pt.onclick = testProxies; }
   $("set-clear").onclick = clearKeys;
   setInterval(() => { if (activeTab === "settings") loadTestnetTrades(); }, 15000); // refresh testnet PnL
   // Forex bot wiring

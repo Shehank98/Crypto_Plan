@@ -85,7 +85,17 @@
           <label class="mb-1 block text-xs text-slate-400">Secret Key</label>
           <input id="set-secret" type="password" placeholder="Testnet secret (write-only)" class="mb-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" />
           <label class="mb-1 block text-xs text-slate-400">Proxy URL <span class="text-slate-600">(only if Binance geo-blocks your server)</span></label>
-          <input id="set-proxy" placeholder="http://user:pass@host:port  (optional)" class="mb-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" />
+          <input id="set-proxy" placeholder="http://user:pass@host:port  — or paste Webshare host:port:user:pass" class="mb-2 w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm outline-none focus:border-indigo-500" />
+          <div class="mb-3 rounded-lg border border-edge bg-ink/40 p-3">
+            <label class="mb-1 block text-xs text-slate-300"><b>🧪 Test proxies</b> — paste all of them (one per line). Webshare's <code>host:port:user:pass</code> works as-is.</label>
+            <textarea id="proxy-list" rows="4" placeholder="31.59.20.176:6754:ilhpwjrk:tz3qex0n8zbk&#10;45.38.107.97:6014:ilhpwjrk:tz3qex0n8zbk" class="w-full rounded-lg border border-edge bg-ink px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500"></textarea>
+            <div class="mt-2 flex items-center gap-2">
+              <button id="proxy-test" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">Test all</button>
+              <span id="proxy-status" class="text-xs text-slate-400"></span>
+            </div>
+            <div id="proxy-results" class="mt-2 space-y-1 text-xs"></div>
+            <p class="mt-2 text-[11px] text-slate-500">✅ = Binance market data loads through it (what the scanner needs). It also checks the testnet host and shows the exit country — Binance restricts some regions, so a working data proxy is what matters most.</p>
+          </div>
           <div class="mb-3 flex items-center gap-3">
             <label class="text-xs text-slate-400">$ per trade</label>
             <input id="set-usd" type="number" min="10" step="10" value="100" class="w-24 rounded-lg border border-edge bg-ink px-2 py-1.5 text-sm outline-none focus:border-indigo-500" />
