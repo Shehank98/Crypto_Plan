@@ -37,7 +37,9 @@ const INDICATOR_REFRESH_SEC = Math.max(15, Number(process.env.INDICATOR_REFRESH_
 const FALLBACK_USD_LKR = Number(process.env.FALLBACK_USD_LKR || 300);
 const MAX_WAIT_CANDLES = Number(process.env.MAX_WAIT_CANDLES || 12); // wait for entry fill
 const MAX_HOLD_CANDLES = Number(process.env.MAX_HOLD_CANDLES || 60); // max time in trade
-const EXCHANGE_ORDER = (process.env.EXCHANGES || "binance").split(",").map((s) => s.trim().toLowerCase());
+// Try Binance first (you trade there), then fall back to Bybit / OKX so the app
+// keeps working when Binance is geo-blocked and the proxy is down. Override with EXCHANGES=.
+const EXCHANGE_ORDER = (process.env.EXCHANGES || "binance,bybit,okx").split(",").map((s) => s.trim().toLowerCase());
 // Binance public hosts tried in order - data-api.binance.vision is the market-data
 // mirror that usually works even where api.binance.com is geo-blocked.
 const BINANCE_HOSTS = (process.env.BINANCE_HOSTS || "https://data-api.binance.vision,https://api.binance.com,https://api-gcp.binance.com,https://api1.binance.com").split(",").map((h) => h.trim());
@@ -184,7 +186,9 @@ async function binanceGet(pathname, params) {
   let err;
   for (const m of modes) {
     for (const h of hosts) {
-      try { const r = await http.get(h + pathname, { params, ...m.cfg }); binanceHost = h; binanceViaProxy = m.viaProxy; return r.data; }
+      // Short timeout so a blocked host / dead proxy fails fast and we can fall
+      // back to Bybit/OKX quickly instead of hanging the scanner.
+      try { const r = await http.get(h + pathname, { params, timeout: 7000, ...m.cfg }); binanceHost = h; binanceViaProxy = m.viaProxy; return r.data; }
       catch (e) { err = e; }
     }
   }
@@ -194,11 +198,15 @@ async function binanceGet(pathname, params) {
 let binanceBases = { at: 0, set: null };
 async function getBinanceBases() {
   if (Date.now() - binanceBases.at < 6 * 3600_000 && binanceBases.set) return binanceBases.set;
+  // If Binance just failed, back off 30 min instead of retrying every 5s tick
+  // (which would stall the whole scanner when Binance is geo-blocked).
+  if (Date.now() - (binanceBases.failAt || 0) < 30 * 60_000) return binanceBases.set;
   try {
     const info = await binanceGet("/api/v3/exchangeInfo");
     const set = new Set((info.symbols || []).filter((s) => s.quoteAsset === QUOTE && s.status === "TRADING" && s.isSpotTradingAllowed).map((s) => s.baseAsset));
-    if (set.size) binanceBases = { at: Date.now(), set };
-  } catch (e) { console.warn("[binance] exchangeInfo:", e.message); }
+    if (set.size) binanceBases = { at: Date.now(), set, failAt: 0 };
+    else binanceBases.failAt = Date.now();
+  } catch (e) { binanceBases.failAt = Date.now(); console.warn("[binance] exchangeInfo:", e.message); }
   return binanceBases.set;
 }
 
