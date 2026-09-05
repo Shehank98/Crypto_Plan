@@ -721,10 +721,20 @@ function advance(t, P, now) {
   const created = new Date(t.created_at).getTime();
   if (t.status === "WAITING") {
     if (belowStop) return { status: "EXPIRED", closed_at: new Date(), result_r: 0, note: "invalidated before entry" };
-    // Fill the LIMIT only when price actually trades to the entry MID (the pullback
-    // level) - not merely touches the top of the zone. Otherwise we'd book a better
-    // price (the mid) than the market gave (the top), a fake instant gain.
-    if (long ? P <= t.entry_mid : P >= t.entry_mid) return { status: "ACTIVE", entered_at: new Date() };
+    // If the move ran to (or near, >=85% of the way to) the target before we ever
+    // filled, the setup is spent - don't chase it back into the zone on the pullback.
+    // Expiring on the tick it runs up means it can't later re-enter and look like an
+    // instant win.
+    const ranLevel = long ? t.entry_mid + 0.85 * (t.tp1 - t.entry_mid) : t.entry_mid - 0.85 * (t.entry_mid - t.tp1);
+    if (long ? P >= ranLevel : P <= ranLevel) return { status: "EXPIRED", closed_at: new Date(), result_r: 0, note: "ran to target before entry (missed)" };
+    // Enter as soon as price trades INTO the entry zone (no need to wait for the exact
+    // midpoint - that left everything stuck WAITING). Fill at the LIVE price clamped
+    // into the zone, so the recorded entry always matches a price the market actually
+    // traded at (no fake gains).
+    if (long ? P <= t.entry_high : P >= t.entry_low) {
+      const fill = rp(Math.min(Math.max(P, t.entry_low), t.entry_high));
+      return { status: "ACTIVE", entered_at: new Date(), entry_mid: fill };
+    }
     if ((now - created) / 60000 > MAX_WAIT_CANDLES * tfMin) return { status: "EXPIRED", closed_at: new Date(), result_r: 0, note: "no entry (no pullback to the zone)" };
     return null;
   }
@@ -1221,8 +1231,7 @@ async function fillPaper(signals) {
     const P = prices.get(s0.symbol);
     if (P == null) continue;
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
-    if (s.entry.window !== "OPEN") continue;                                 // extended/stale now -> don't enter (no fake gains)
-    if (P > s.entry.mid) continue;                                           // LONG limit at the mid not reached yet (price still above the pullback level)
+    if (s.entry.window !== "OPEN") continue;                                 // OPEN = price is in the zone (not chasing, not past/near TP1); enter anywhere in the zone
     const equity = acct.start + acct.realized;
     const cost = settings.riskSizing
       ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: 1 })
@@ -1265,10 +1274,11 @@ async function openPaper(s, cost) {
   if (cost == null) { const a = await paperAccount(); cost = Math.min(settings.paperPositionUsd, a.cash); }
   if (cost < 1) return;
   const { idx, t: tgt } = tpTarget(s, settings.paperTpLevel);
-  // Fill at the entry MID (the pullback limit price) - the same reference the
-  // Track Record uses. fillPaper only calls this once price has reached the mid,
-  // so the fill matches where the market actually was (no fake gains).
-  const entry = s.entry.mid;
+  // Fill at the LIVE price (reclassifyEntry set s.priceUsd to the current market),
+  // clamped into the entry zone. fillPaper only reaches here when the window is OPEN
+  // (price is in the zone, not chasing/past TP1), so the fill matches a price the
+  // market actually traded at - no fake gains, and no waiting for the exact midpoint.
+  const entry = rp(Math.min(Math.max(s.priceUsd, s.entry.low), s.entry.high));
   const tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
   const qty = cost / entry, eta1 = tgt.etaMin ?? null;
   const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
@@ -1377,8 +1387,7 @@ async function fillFutures(signals) {
     const P = prices.get(s0.symbol);
     if (P == null) continue;
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
-    if (s.entry.window !== "OPEN") continue;                                 // extended/stale now -> don't enter (no fake gains)
-    if (s.direction === "LONG" ? P > s.entry.mid : P < s.entry.mid) continue; // limit at the mid not reached yet
+    if (s.entry.window !== "OPEN") continue;                                 // OPEN = price is in the zone (not chasing, not past/near TP1); enter anywhere in the zone
     const equity = acct.start + acct.realized;
     const margin = settings.riskSizing
       ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: Math.max(1, settings.futuresLeverage) })
@@ -1393,9 +1402,10 @@ async function openFutures(s, margin) {
   const lev = Math.max(1, settings.futuresLeverage), notional = round(margin * lev, 2);
   const { idx, t: tgt } = tpTarget(s, settings.futuresTpLevel);
   const long = s.direction === "LONG";
-  // Fill at the entry MID (the limit price); fillFutures only calls this once
-  // price has reached the mid, so the fill matches the market (no fake gains).
-  const entry = s.entry.mid;
+  // Fill at the LIVE price clamped into the entry zone (reclassifyEntry set
+  // s.priceUsd to the current market). fillFutures only reaches here when the window
+  // is OPEN, so the fill matches a price the market actually traded at (no fake gains).
+  const entry = rp(Math.min(Math.max(s.priceUsd, s.entry.low), s.entry.high));
   const tp1 = tgt.priceUsd, stop = s.stop.priceUsd;
   const qty = notional / entry, eta1 = tgt.etaMin ?? null;
   const g1 = tgt.gainPct, riskPct = s.stop.riskPct, rr = round(g1 / Math.max(0.01, riskPct), 1);
