@@ -232,15 +232,17 @@ function renderEntryBanner(elId, p) {
   const e = p && p.entry;
   if (!e) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
+  const st = p && p.stance;
+  const stanceLine = st ? `<div class="mt-1 opacity-90">${st.emoji} <b>${st.tier}</b> — ${st.text}</div>` : "";
   el.className = "mb-4 rounded-lg border px-4 py-2 text-sm";
   if (e.allowed) {
     const extra = p.approval ? " · asking you on Telegram before each trade" : "";
     el.style.cssText = "border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.12);color:#6ee7b7";
-    el.innerHTML = `✅ <b>New entries open</b> · ${e.session} session${extra}`;
+    el.innerHTML = `✅ <b>New entries open</b> · ${e.session} session${extra}${stanceLine}`;
   } else {
     const when = e.nextOpenInMin != null ? ` · opens in <b>${fmtHM(e.nextOpenInMin)}</b>${e.nextOpenSL ? ` (${e.nextOpenSL})` : ""}` : "";
     el.style.cssText = "border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.12);color:#fcd34d";
-    el.innerHTML = `⏸ <b>New entries paused</b> — ${e.reason || e.session + " session"}${when}. Open trades are still managed.`;
+    el.innerHTML = `⏸ <b>New entries paused</b> — ${e.reason || e.session + " session"}${when}. Open trades are still managed.${stanceLine}`;
   }
 }
 // Minutes between two ISO timestamps.

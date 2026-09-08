@@ -1373,6 +1373,17 @@ function entryStatus(now = Date.now()) {
   const nx = g.allow || !anyGuard ? { open: true, inMin: 0, at: now } : nextEntryOpen(now);
   return { allowed: g.allow, reason: g.reason, session: s.session, guarded: anyGuard, nextOpenInMin: nx.inMin, nextOpenSL: nx.at ? slClock(nx.at) : null };
 }
+// Professional directional stance from the market regime: which way the system
+// leans right now. RISK_OFF -> short futures, hold spot in cash; RISK_ON -> long;
+// NEUTRAL -> both (trend-aligned first). This is the "trade with the market" brain.
+function marketBias() { if (!settings.regimeFilter) return null; return marketRegime.tier === "RISK_OFF" ? "SHORT" : marketRegime.tier === "RISK_ON" ? "LONG" : null; }
+function marketStance() {
+  const t = marketRegime.tier;
+  if (!settings.regimeFilter) return { tier: t, futures: "BOTH", spot: "LONG", emoji: "⚖️", text: "Regime filter off - trading both directions." };
+  if (t === "RISK_OFF") return { tier: t, futures: "SHORT", spot: "CASH", emoji: "📉", text: `Market leaning DOWN (breadth ${marketRegime.breadthPct ?? "-"}%${marketRegime.btcWeak ? ", BTC weak" : ""}) - futures take SHORTS, spot sits in cash.` };
+  if (t === "RISK_ON") return { tier: t, futures: "LONG", spot: "LONG", emoji: "📈", text: `Market leaning UP (breadth ${marketRegime.breadthPct ?? "-"}%) - taking longs, no new shorts.` };
+  return { tier: t, futures: "BOTH", spot: "LONG", emoji: "⚖️", text: "Mixed market - longs and shorts both allowed, trend-aligned setups first." };
+}
 // Perp funding: longs pay (shorts receive) roughly every 8h. Estimate the holding
 // cost as notional x rate x (funding windows crossed while the position was held).
 function fundingWindowsCrossed(openMs, closeMs) {
@@ -1601,7 +1612,11 @@ async function fillFutures(signals) {
   if (!entryGate().allow) return;                                            // session / weekend / daily-open guard
   if (dailyHalted((await futuresDaily()).net, settings.futuresCapitalUsd)) return; // daily loss circuit breaker
   const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
-  const ranked = signals.filter(futuresEligible).sort((a, b) => paperScore(b) - paperScore(a));
+  // Rank by ROI/time/accuracy, but tilt trend-aligned setups to the front so in a
+  // downtrend the book fills shorts first (and longs first in an uptrend).
+  const bias = marketBias();
+  const tScore = (s) => paperScore(s) * (bias && s.direction === bias ? 1.15 : 1);
+  const ranked = signals.filter(futuresEligible).sort((a, b) => tScore(b) - tScore(a));
   for (const s0 of ranked) {
     if (await fstore.countOpen() >= settings.futuresMaxOpen) break;
     const acct = await futuresAccount();
@@ -1950,7 +1965,7 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
   const day = await paperDaily();
   const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null; // progress is DAILY net
-  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, tfs: settings.paperTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, entry: entryStatus(), approval: settings.paperApproval, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, tfs: settings.paperTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, entry: entryStatus(), stance: marketStance(), approval: settings.paperApproval, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
 app.get("/api/paper/analytics", wrap(async (_req, res) => res.json(bookAnalytics(await pstore.all(5000), settings.capitalUsd))));
@@ -1978,12 +1993,12 @@ app.get("/api/futures/trades", wrap(async (_req, res) => {
   const wr = closed.length ? round((a.wins / closed.length) * 100, 1) : null;
   const day = await futuresDaily();
   const goal = settings.futuresGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null;
-  res.json({ enabled: settings.futuresTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, equityUsd: equity, realizedUsd: a.realized, marginPerTrade: settings.futuresMarginUsd, leverage: settings.futuresLeverage, maxOpen: settings.futuresMaxOpen, tpLevel: settings.futuresTpLevel, tfs: settings.futuresTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.futuresMaxEtaMin, entry: entryStatus(), approval: settings.paperApproval, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
+  res.json({ enabled: settings.futuresTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, equityUsd: equity, realizedUsd: a.realized, marginPerTrade: settings.futuresMarginUsd, leverage: settings.futuresLeverage, maxOpen: settings.futuresMaxOpen, tpLevel: settings.futuresTpLevel, tfs: settings.futuresTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.futuresMaxEtaMin, entry: entryStatus(), stance: marketStance(), approval: settings.paperApproval, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
 app.post("/api/futures/reset", wrap(async (_req, res) => { await fstore.reset(); res.json({ ok: true }); }));
 app.get("/api/futures/analytics", wrap(async (_req, res) => res.json(bookAnalytics(await fstore.all(5000), settings.futuresCapitalUsd))));
 
-app.get("/api/regime", wrap(async (_req, res) => res.json(marketRegime)));
+app.get("/api/regime", wrap(async (_req, res) => res.json({ ...marketRegime, stance: marketStance() })));
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
@@ -2371,4 +2386,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias };
