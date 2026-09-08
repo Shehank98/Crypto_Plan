@@ -1317,6 +1317,7 @@ function fmtPaperSell(o) {
   const head = isF ? `${o.win ? "🎯" : "🛑"} *FUTURES ${o.direction} ${o.symbol} - CLOSED*` : `${o.win ? "🎯" : "🛑"} *PAPER SELL - ${o.symbol}*`;
   const outcome = o.reason === "TP" || o.reason === "TP1" ? `✅ TP${o.tpLevel || 1} HIT | Win`
     : o.reason === "LIQ" ? "💥 LIQUIDATED | Loss"
+    : o.reason === "MANUAL" ? `✋ CLOSED MANUALLY | ${o.win ? "Win" : "Loss"}`
     : o.reason === "TIME" ? `⌛ TIME EXIT | ${o.win ? "Win" : "Loss"}`
     : o.reason === "DERISK" ? `🛟 DE-RISKED (near liq) | ${o.win ? "Win" : "Loss"}`
     : o.reason === "KILL" ? `🛑 KILL SWITCH | ${o.win ? "Win" : "Loss"}`
@@ -2096,6 +2097,32 @@ app.get("/api/paper/trades", wrap(async (_req, res) => {
   const goal = settings.paperGoalUsd, goalPct = goal > 0 ? round((day.net / goal) * 100, 0) : null; // progress is DAILY net
   res.json({ enabled: settings.paperTrading, startUsd: a.start, cashUsd: a.cash, investedUsd: a.invested, holdingsValueUsd: round(holdingsValue, 2), equityUsd: round(equity, 2), realizedUsd: a.realized, unrealizedUsd: round(holdingsValue - a.invested, 2), maxOpen: settings.paperMaxOpen, positionUsd: settings.paperPositionUsd, tpLevel: settings.paperTpLevel, tfs: settings.paperTfs, goalUsd: goal, goalPct, daily: day, maxEtaMin: settings.paperMaxEtaMin, entry: entryStatus(), stance: marketStance(), approval: settings.paperApproval, open, recent: closed.slice(0, 50), closed: closed.length, wins: a.wins, losses: a.losses, winRatePct: wr });
 }));
+// Manually close one open paper/futures position at the live price (reason MANUAL).
+async function manualClose(book, id) {
+  const store = book === "futures" ? fstore : pstore, kind = book === "futures" ? "futures" : "spot";
+  const open = await store.openTrades();
+  const t = open.find((x) => String(x.id) === String(id));
+  if (!t) return { ok: false, error: "trade not found or already closed" };
+  const prices = await getTickerMap().catch(() => new Map());
+  const P = prices.get(t.symbol);
+  if (P == null) return { ok: false, error: "no live price right now - try again in a moment" };
+  const long = t.direction !== "SHORT", exit = rp(P);
+  const notional = Number(t.notional_usd) || Number(t.cost_usd) || 0;
+  const movePct = (long ? (exit - t.entry_price) : (t.entry_price - exit)) / t.entry_price * 100;
+  let pnl = netAfterCosts(notional * movePct / 100, notional, kind);
+  if (kind === "futures") pnl -= fundingCost(notional, t.direction, new Date(t.opened_at).getTime(), Date.now());
+  if (kind === "futures" && pnl < -t.cost_usd) pnl = -t.cost_usd;
+  const pnlPct = round((pnl / Math.max(0.01, t.cost_usd)) * 100, 2);
+  const status = pnl >= 0 ? "WIN" : "LOSS";
+  await store.close(t.id, { status, exit_price: exit, exit_reason: "MANUAL", pnl_usd: round(pnl, 2), pnl_pct: kind === "futures" ? pnlPct : round(movePct, 2), closed_at: new Date() });
+  const acct = book === "futures" ? await futuresAccount() : await paperAccount();
+  const day = book === "futures" ? await futuresDaily() : await paperDaily();
+  const startCap = book === "futures" ? settings.futuresCapitalUsd : settings.capitalUsd;
+  await tgBroadcast(fmtPaperSell({ kind, symbol: t.symbol, direction: t.direction, leverage: t.leverage, win: pnl >= 0, reason: "MANUAL", tpLevel: t.tp_level || 1, cost: t.cost_usd, entry: t.entry_price, exit, movePct: round(movePct, 2), pnl: round(pnl, 2), pnlPct, balance: round(startCap + acct.realized, 2), realized: acct.realized, day })).catch(() => {});
+  return { ok: true, symbol: t.symbol, pnl: round(pnl, 2), exit };
+}
+app.post("/api/paper/close", wrap(async (req, res) => { const r = await manualClose("spot", req.body && req.body.id); res.status(r.ok ? 200 : 400).json(r); }));
+app.post("/api/futures/close", wrap(async (req, res) => { const r = await manualClose("futures", req.body && req.body.id); res.status(r.ok ? 200 : 400).json(r); }));
 app.post("/api/paper/reset", wrap(async (_req, res) => { await pstore.reset(); res.json({ ok: true }); }));
 app.get("/api/paper/analytics", wrap(async (_req, res) => res.json(bookAnalytics(await pstore.all(5000), settings.capitalUsd))));
 
