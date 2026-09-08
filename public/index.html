@@ -364,6 +364,28 @@
   </div>
 
   <!-- Chart modal -->
+  <!-- TRADE DIALOG (from Market Scan) -->
+  <div id="trade-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-3">
+    <div class="card w-full max-w-md p-4">
+      <div class="mb-2 flex items-center justify-between">
+        <h3 id="trade-title" class="text-base font-bold text-white"></h3>
+        <button id="trade-close" class="rounded-lg border border-edge bg-panel px-2 py-1 text-xs hover:bg-edge">✕</button>
+      </div>
+      <div id="trade-levels" class="mb-3 text-xs text-slate-400"></div>
+      <div class="flex flex-wrap items-end gap-3 text-sm">
+        <label class="flex flex-col gap-1" id="trade-amt-wrap"><span class="text-xs text-slate-400" id="trade-amt-label">Amount $</span><input id="trade-amt" type="number" min="1" step="1" class="w-28 rounded border border-edge bg-ink px-2 py-1.5 text-sm" /></label>
+        <label class="flex flex-col gap-1" id="trade-lev-wrap"><span class="text-xs text-slate-400">Leverage</span><input id="trade-lev" type="number" min="1" max="125" step="1" class="w-20 rounded border border-edge bg-ink px-2 py-1.5 text-sm" /></label>
+        <span id="trade-cash" class="text-xs text-slate-500"></span>
+      </div>
+      <div id="trade-proj" class="my-3 rounded-lg border border-edge bg-ink/40 p-3 text-sm"></div>
+      <div class="flex items-center gap-2">
+        <button id="trade-go" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Open trade</button>
+        <button id="trade-cancel" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">Cancel</button>
+        <span id="trade-msg" class="text-xs"></span>
+      </div>
+    </div>
+  </div>
+
   <div id="chart-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-3">
     <div class="card w-full max-w-5xl p-4" style="max-height:92vh; overflow-y:auto">
       <div class="mb-2 flex items-center justify-between">

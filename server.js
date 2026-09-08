@@ -2161,10 +2161,31 @@ app.get("/api/scan", wrap(async (req, res) => {
   res.json({ regime: marketRegime, stance: marketStance(), scanned: all.length, universe: settings.universeSize, rows });
 }));
 
+// Quote for the trade dialog: the setup's levels + how much cash the book has, so
+// the UI can ask "how much / what leverage" and show the projected P/L live.
+app.get("/api/scan/quote", wrap(async (req, res) => {
+  const book = req.query.book === "futures" ? "futures" : "spot";
+  const symbol = String(req.query.symbol || "").toUpperCase(), tf = req.query.tf;
+  if (!symbol || !TF_MINUTES[tf]) { res.status(400).json({ ok: false, error: "symbol and timeframe required" }); return; }
+  const data = scanCache[tf] && scanCache[tf].data;
+  let sig = data && data.signals.find((s) => s.symbol === symbol);
+  if (!sig || !sig.entry || !sig.targets) { res.status(400).json({ ok: false, error: "no live setup for that coin/timeframe" }); return; }
+  const prices = await getTickerMap().catch(() => new Map());
+  const P = prices.get(symbol);
+  if (P != null) sig = reclassifyEntry(sig, P);
+  const acct = book === "futures" ? await futuresAccount() : await paperAccount();
+  res.json({
+    ok: true, book, symbol, direction: sig.direction, window: sig.entry.window, price: sig.priceUsd,
+    entry: sig.entry.mid, tp1: sig.targets[0].priceUsd, stop: sig.stop.priceUsd, gain1: sig.targets[0].gainPct,
+    riskPct: sig.stop.riskPct, etaLabel: sig.targets[0].etaLabel, cashAvail: round(acct.cash, 2),
+    defaultSize: book === "futures" ? settings.futuresMarginUsd : settings.paperPositionUsd, leverage: settings.futuresLeverage,
+  });
+}));
+
 // One-click "Trade this" from the Market Scan: manually open a setup in the chosen
-// paper book. A manual click IS the decision, so it bypasses the auto-filters
-// (regime / session / backtest gate) - but still honours the honest fill (must be
-// enterable now), one-per-coin, cross-book, max-open, and your size/leverage.
+// paper book at the amount/leverage you pick. A manual click IS the decision, so it
+// bypasses the auto-filters (regime / session / backtest gate) - but still honours
+// the honest fill (must be enterable now), one-per-coin, cross-book and max-open.
 app.post("/api/scan/trade", wrap(async (req, res) => {
   const book = req.body && req.body.book === "futures" ? "futures" : "spot";
   const symbol = String((req.body && req.body.symbol) || "").toUpperCase();
@@ -2179,20 +2200,22 @@ app.post("/api/scan/trade", wrap(async (req, res) => {
   if (P != null) sig = reclassifyEntry(sig, P);
   if (sig.entry.window !== "OPEN") { res.status(400).json({ ok: false, error: `not enterable now (${sig.entry.window}) - price isn't in the entry zone` }); return; }
   if (await pstore.hasOpen(symbol) || await fstore.hasOpen(symbol)) { res.status(400).json({ ok: false, error: "already holding this coin (spot or futures)" }); return; }
+  const amt = Number(req.body && req.body.amount), hasAmt = Number.isFinite(amt) && amt > 0;   // amount you chose in the dialog
   if (book === "spot") {
     if (await pstore.countOpen() >= settings.paperMaxOpen) { res.status(400).json({ ok: false, error: "spot portfolio full (max open)" }); return; }
     const a = await paperAccount(), equity = a.start + a.realized;
     const sized = settings.riskSizing ? riskBasedCost({ equity, cashAvail: a.cash, stopRiskPct: sig.stop.riskPct, confidence: sig.confidence, leverage: 1 }) : settings.paperPositionUsd;
-    const cost = Math.min(sized, settings.paperPositionUsd, a.cash);
-    if (cost < 1) { res.status(400).json({ ok: false, error: "no cash available" }); return; }
+    const cost = Math.min(hasAmt ? amt : Math.min(sized, settings.paperPositionUsd), a.cash);   // your amount wins, still capped by cash
+    if (cost < 1) { res.status(400).json({ ok: false, error: `not enough cash (available $${round(a.cash, 2)})` }); return; }
     const id = await openPaper(sig, cost);
     res.json({ ok: true, book, id, symbol, entry: sig.entry.mid, cost: round(cost, 2) });
   } else {
     if (await fstore.countOpen() >= settings.futuresMaxOpen) { res.status(400).json({ ok: false, error: "futures portfolio full (max open)" }); return; }
-    const a = await futuresAccount(), equity = a.start + a.realized, lev = Math.max(1, settings.futuresLeverage);
+    const a = await futuresAccount(), equity = a.start + a.realized;
+    const lev = Number.isFinite(+(req.body && req.body.leverage)) && +req.body.leverage >= 1 ? Math.min(125, Math.round(+req.body.leverage)) : Math.max(1, settings.futuresLeverage);
     const sized = settings.riskSizing ? riskBasedCost({ equity, cashAvail: a.cash, stopRiskPct: sig.stop.riskPct, confidence: sig.confidence, leverage: lev }) : settings.futuresMarginUsd;
-    const margin = Math.min(sized, settings.futuresMarginUsd, a.cash);
-    if (margin < 1) { res.status(400).json({ ok: false, error: "no margin cash available" }); return; }
+    const margin = Math.min(hasAmt ? amt : Math.min(sized, settings.futuresMarginUsd), a.cash);
+    if (margin < 1) { res.status(400).json({ ok: false, error: `not enough margin cash (available $${round(a.cash, 2)}) - reset the Futures book or close a trade` }); return; }
     const id = await openFutures(sig, margin, lev);
     res.json({ ok: true, book, id, symbol, entry: sig.entry.mid, margin: round(margin, 2), leverage: lev });
   }
