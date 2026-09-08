@@ -771,42 +771,59 @@ async function loadMarket() {
 let tradeQuote = null;
 async function openTradeDialog(sym, tf, book) {
   const m = $("trade-modal");
-  if (!m || !$("trade-proj")) { const st = $("market-status"); if (st) st.innerHTML = '<span class="text-amber-400">Hard-refresh the page (Ctrl/Cmd+Shift+R) to load the new trade dialog.</span>'; return; }
-  $("trade-msg").textContent = ""; $("trade-proj").innerHTML = "Loading…";
+  if (!m) { const st = $("market-status"); if (st) st.innerHTML = '<span class="text-amber-400">Hard-refresh the page (Ctrl/Cmd+Shift+R) to load the trade dialog.</span>'; return; }
   m.classList.remove("hidden"); m.classList.add("flex");
-  let q; try { q = await api(`/api/scan/quote?book=${book}&symbol=${encodeURIComponent(sym)}&tf=${tf}`); } catch (e) { $("trade-proj").innerHTML = `<span class="text-rose-400">${e.message}</span>`; return; }
-  tradeQuote = { ...q, tf };
   const isF = book === "futures";
-  $("trade-title").innerHTML = `${isF ? "⚡ Futures" : "📝 Spot"} · ${sym} · ${q.direction}`;
-  $("trade-levels").innerHTML = `Entry ~ ${usd(q.entry)} · 🎯 TP1 ${usd(q.tp1)} (+${q.gain1}%) · 🛑 Stop ${usd(q.stop)} (-${q.riskPct}%) · ETA ${q.etaLabel || "-"}`;
-  $("trade-amt-label").textContent = isF ? "Margin $" : "Amount $";
-  $("trade-amt").value = Math.min(q.defaultSize, q.cashAvail > 0 ? q.cashAvail : q.defaultSize);
-  $("trade-lev-wrap").hidden = !isF;
-  if (isF) $("trade-lev").value = q.leverage;
-  $("trade-cash").textContent = `Available: $${q.cashAvail}`;
-  const recompute = () => {
-    const amt = Number($("trade-amt").value) || 0, lev = isF ? (Number($("trade-lev").value) || 1) : 1;
-    const notional = amt * lev;
-    const profit = notional * q.gain1 / 100;
-    let loss = notional * q.riskPct / 100; if (isF && loss > amt) loss = amt;
-    const curVal = amt * (q.price / q.entry);      // current market value of the position
-    $("trade-proj").innerHTML = `${isF ? `Notional <b>$${(notional).toFixed(2)}</b> (${lev}x) · ` : ""}Current value <b>$${curVal.toFixed(2)}</b>`
-      + `<div class="mt-1">📈 If TP1 hits → <b class="text-emerald-400">+$${profit.toFixed(2)}</b></div>`
-      + `<div>📉 If stop hits → <b class="text-rose-400">-$${loss.toFixed(2)}</b></div>`
-      + (amt > q.cashAvail ? `<div class="mt-1 text-amber-400">Amount exceeds available cash ($${q.cashAvail}) - it'll be capped.</div>` : "")
-      + (q.window !== "OPEN" ? `<div class="mt-1 text-amber-400">Not enterable now (${q.window}) - it may be refused.</div>` : "");
-  };
-  $("trade-amt").oninput = recompute; $("trade-lev").oninput = recompute; recompute();
-  $("trade-go").onclick = async () => {
-    const amt = Number($("trade-amt").value) || 0, lev = isF ? Number($("trade-lev").value) || 1 : 1;
-    $("trade-msg").innerHTML = '<span class="text-slate-400">Opening…</span>';
-    try {
-      const r = await api2("/api/scan/trade", { book, symbol: sym, tf, amount: amt, leverage: lev });
-      $("trade-msg").innerHTML = `<span class="text-emerald-400">✓ opened @ ${usd(r.entry)}</span>`;
-      $("market-status").innerHTML = `<span class="text-emerald-400">✓ ${isF ? "Futures" : "Spot"} ${sym} opened (${isF ? `$${r.margin} ${r.leverage}x` : `$${r.cost}`})</span>`;
-      setTimeout(() => { closeTradeDialog(); loadMarket(); }, 700);
-    } catch (e) { $("trade-msg").innerHTML = `<span class="text-rose-400">✗ ${e.message}</span>`; }
-  };
+  if ($("trade-title")) $("trade-title").textContent = `${isF ? "⚡ Futures" : "📝 Spot"} · ${sym}`;
+  // Build/find the body container (works even if the cached page lacks #trade-body).
+  let body = $("trade-body");
+  if (!body) { body = document.createElement("div"); body.id = "trade-body"; (m.querySelector(".card") || m).appendChild(body); }
+  body.innerHTML = '<div class="py-2 text-slate-400">Loading…</div>';
+  let q;
+  try { q = await api(`/api/scan/quote?book=${book}&symbol=${encodeURIComponent(sym)}&tf=${tf}`); }
+  catch (e) { body.innerHTML = `<div class="py-2 text-rose-400">${e.message}</div>`; return; }
+  try {
+    if ($("trade-title")) $("trade-title").textContent = `${isF ? "⚡ Futures" : "📝 Spot"} · ${sym} · ${q.direction}`;
+    body.innerHTML = `
+      <div class="mb-3 text-xs text-slate-400">Entry ~ ${usd(q.entry)} · 🎯 TP1 ${usd(q.tp1)} (+${q.gain1}%) · 🛑 Stop ${usd(q.stop)} (-${q.riskPct}%) · ETA ${q.etaLabel || "-"}</div>
+      <div class="flex flex-wrap items-end gap-3 text-sm">
+        <label class="flex flex-col gap-1"><span class="text-xs text-slate-400">${isF ? "Margin $" : "Amount $"}</span><input id="td-amt" type="number" min="1" step="1" class="w-28 rounded border border-edge bg-ink px-2 py-1.5 text-sm" /></label>
+        ${isF ? `<label class="flex flex-col gap-1"><span class="text-xs text-slate-400">Leverage</span><input id="td-lev" type="number" min="1" max="125" step="1" class="w-20 rounded border border-edge bg-ink px-2 py-1.5 text-sm" /></label>` : ""}
+        <span class="text-xs text-slate-500">Available: <b class="text-slate-300">$${q.cashAvail}</b></span>
+      </div>
+      <div id="td-proj" class="my-3 rounded-lg border border-edge p-3 text-sm" style="background:rgba(255,255,255,.03)"></div>
+      <div class="flex items-center gap-2">
+        <button id="td-go" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Open trade</button>
+        <button id="td-cancel" class="rounded-lg border border-edge bg-panel px-3 py-2 text-sm hover:bg-edge">Cancel</button>
+        <span id="td-msg" class="text-xs"></span>
+      </div>`;
+    const amtEl = $("td-amt"), levEl = $("td-lev");
+    amtEl.value = Math.min(q.defaultSize, q.cashAvail > 0 ? q.cashAvail : q.defaultSize);
+    if (isF && levEl) levEl.value = q.leverage;
+    const recompute = () => {
+      const amt = Number(amtEl.value) || 0, lev = isF && levEl ? (Number(levEl.value) || 1) : 1;
+      const notional = amt * lev, profit = notional * q.gain1 / 100;
+      let loss = notional * q.riskPct / 100; if (isF && loss > amt) loss = amt;
+      const curVal = q.entry ? amt * (q.price / q.entry) : amt;
+      $("td-proj").innerHTML = `${isF ? `Notional <b>$${notional.toFixed(2)}</b> (${lev}x) · ` : ""}Current value <b>$${curVal.toFixed(2)}</b>`
+        + `<div class="mt-1">📈 If TP1 hits → <b class="text-emerald-400">+$${profit.toFixed(2)}</b></div>`
+        + `<div>📉 If stop hits → <b class="text-rose-400">-$${loss.toFixed(2)}</b></div>`
+        + (amt > q.cashAvail ? `<div class="mt-1 text-amber-400">Above available cash ($${q.cashAvail}) - will be capped.</div>` : "")
+        + (q.window !== "OPEN" ? `<div class="mt-1 text-amber-400">Not enterable now (${q.window}) - may be refused.</div>` : "");
+    };
+    amtEl.oninput = recompute; if (levEl) levEl.oninput = recompute; recompute();
+    $("td-cancel").onclick = closeTradeDialog;
+    $("td-go").onclick = async () => {
+      const amt = Number(amtEl.value) || 0, lev = isF && levEl ? (Number(levEl.value) || 1) : 1;
+      $("td-msg").innerHTML = '<span class="text-slate-400">Opening…</span>';
+      try {
+        const r = await api2("/api/scan/trade", { book, symbol: sym, tf, amount: amt, leverage: lev });
+        $("td-msg").innerHTML = `<span class="text-emerald-400">✓ opened @ ${usd(r.entry)}</span>`;
+        if ($("market-status")) $("market-status").innerHTML = `<span class="text-emerald-400">✓ ${isF ? "Futures" : "Spot"} ${sym} opened (${isF ? `$${r.margin} ${r.leverage}x` : `$${r.cost}`})</span>`;
+        setTimeout(() => { closeTradeDialog(); loadMarket(); }, 700);
+      } catch (e) { $("td-msg").innerHTML = `<span class="text-rose-400">✗ ${e.message}</span>`; }
+    };
+  } catch (e) { body.innerHTML = `<div class="py-2 text-rose-400">Dialog error: ${e.message}</div>`; }
 }
 function closeTradeDialog() { const m = $("trade-modal"); if (m) { m.classList.add("hidden"); m.classList.remove("flex"); } }
 
