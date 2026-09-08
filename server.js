@@ -1269,9 +1269,12 @@ async function fillPaper(signals) {
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
     if (s.entry.window !== "OPEN") continue;                                 // OPEN = price is in the zone (not chasing, not past/near TP1); enter anywhere in the zone
     const equity = acct.start + acct.realized;
-    const cost = settings.riskSizing
+    // Respect the $/trade you set: it's a HARD CAP even with risk-sizing on, so a
+    // trade never spends more than your Position $ (still capped by available cash).
+    const sized = settings.riskSizing
       ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: 1 })
-      : Math.min(settings.paperPositionUsd, acct.cash);
+      : settings.paperPositionUsd;
+    const cost = Math.min(sized, settings.paperPositionUsd, acct.cash);
     if (cost < 1) continue;
     await openPaper(s, cost).catch((e) => console.warn("[paper]", e.message));
   }
@@ -1579,9 +1582,12 @@ async function fillFutures(signals) {
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
     if (s.entry.window !== "OPEN") continue;                                 // OPEN = price is in the zone (not chasing, not past/near TP1); enter anywhere in the zone
     const equity = acct.start + acct.realized;
-    const margin = settings.riskSizing
+    // Respect the margin/trade you set: hard cap even with risk-sizing on, so a
+    // position never uses more margin than your Margin $ (still capped by cash).
+    const sizedM = settings.riskSizing
       ? riskBasedCost({ equity, cashAvail: acct.cash, stopRiskPct: s.stop.riskPct, confidence: s.confidence, leverage: Math.max(1, settings.futuresLeverage) })
-      : Math.min(settings.futuresMarginUsd, acct.cash);
+      : settings.futuresMarginUsd;
+    const margin = Math.min(sizedM, settings.futuresMarginUsd, acct.cash);
     if (margin < 1) continue;
     await openFutures(s, margin).catch((e) => console.warn("[futures]", e.message));
   }

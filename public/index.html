@@ -150,7 +150,7 @@
     <div id="tab-settings" class="hidden">
       <div class="mb-4 card p-4">
         <h3 class="mb-1 text-sm font-semibold text-slate-300">🛡️ Risk model <span class="text-xs font-normal text-slate-500">(applies to both paper books)</span></h3>
-        <p class="mb-3 text-xs text-slate-500">Professional risk sizing: each trade risks a % of equity (not a fixed $), scaled up on higher-conviction setups but never past the hard cap. Fees + slippage are charged on every trade so results are realistic. A daily-loss breaker halts a book after a bad day; a correlation cap limits same-direction positions.</p>
+        <p class="mb-3 text-xs text-slate-500">Professional risk sizing: each trade risks a % of equity (not a fixed $), scaled up on higher-conviction setups but never past the hard cap. Your <b>Position $ / Margin $</b> per trade (set on the Spot/Futures tabs) is always a hard cap - risk sizing can go lower but never above it, and your Leverage and Max-open settings are always respected. Fees + slippage are charged on every trade so results are realistic. A daily-loss breaker halts a book after a bad day; a correlation cap limits same-direction positions.</p>
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-300">
           <label class="flex items-center gap-2"><input id="rk-sizing" type="checkbox" class="h-4 w-4" /> <b>Risk-based sizing</b> (off = fixed $/trade)</label>
           <label class="flex items-center gap-1">Base risk % <input id="rk-base" type="number" min="0.1" step="0.1" value="1" class="w-16 rounded border border-edge bg-ink px-2 py-1 text-sm" /></label>
