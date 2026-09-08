@@ -753,6 +753,7 @@ async function loadSettings() {
     if ($("gd-derisk")) $("gd-derisk").checked = !!s.liqAutoDerisk;
     if ($("gd-fng")) $("gd-fng").checked = !!s.fngFilter;
     if ($("gd-mom")) $("gd-mom").checked = !!s.momentumFilter;
+    if ($("gd-pattern")) $("gd-pattern").checked = !!s.patternTrades;
     const gd = { "gd-open": s.dailyOpenGuardMin, "gd-fund": s.fundingRatePct, "gd-kill": s.killSwitchPct, "gd-liq": s.liqBufferPct, "gd-hold": s.maxHoldHours, "gd-fngmax": s.fngMaxLong, "gd-fngmin": s.fngMinShort };
     for (const [id, v] of Object.entries(gd)) if ($(id) && v != null) $(id).value = v;
     if ($("gd-fngnow")) $("gd-fngnow").textContent = s.fearGreed ? `· now ${s.fearGreed.value} (${s.fearGreed.cls})` : "";
@@ -804,7 +805,7 @@ async function saveRiskModel() {
 }
 async function saveGuards() {
   try {
-    await api2("/api/settings", { sessionFilter: $("gd-session").checked, weekendGuard: $("gd-weekend").checked, liqAutoDerisk: $("gd-derisk").checked, dailyOpenGuardMin: Number($("gd-open").value) || 0, fundingRatePct: Number($("gd-fund").value) || 0, killSwitchPct: Number($("gd-kill").value) || 0, liqBufferPct: Number($("gd-liq").value) || 0, maxHoldHours: Number($("gd-hold").value) || 0, fngFilter: $("gd-fng").checked, fngMaxLong: Number($("gd-fngmax").value) || 80, fngMinShort: Number($("gd-fngmin").value) || 20, momentumFilter: $("gd-mom").checked });
+    await api2("/api/settings", { sessionFilter: $("gd-session").checked, weekendGuard: $("gd-weekend").checked, liqAutoDerisk: $("gd-derisk").checked, dailyOpenGuardMin: Number($("gd-open").value) || 0, fundingRatePct: Number($("gd-fund").value) || 0, killSwitchPct: Number($("gd-kill").value) || 0, liqBufferPct: Number($("gd-liq").value) || 0, maxHoldHours: Number($("gd-hold").value) || 0, fngFilter: $("gd-fng").checked, fngMaxLong: Number($("gd-fngmax").value) || 80, fngMinShort: Number($("gd-fngmin").value) || 20, momentumFilter: $("gd-mom").checked, patternTrades: $("gd-pattern").checked });
     $("gd-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
     loadSettings();
   } catch (e) { $("gd-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }

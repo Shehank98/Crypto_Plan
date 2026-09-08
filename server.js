@@ -156,6 +156,44 @@ function candlePatterns(o, h, l, c) {
   if (body / range < 0.1) out.push({ name: "Doji (indecision)", bias: "neutral" });
   return out;
 }
+// Swing pivots: index i is a pivot if it's the local min/max over +/-k bars.
+function pivotIdx(arr, k, kind) {
+  const out = [];
+  for (let i = k; i < arr.length - k; i++) {
+    let ok = true;
+    for (let j = i - k; j <= i + k; j++) { if (j === i) continue; if (kind === "low" ? arr[j] < arr[i] : arr[j] > arr[i]) { ok = false; break; } }
+    if (ok) out.push(i);
+  }
+  return out;
+}
+// Multi-bar CHART patterns (structure, not single candles): double bottom (W) and
+// double top (M). A coin can print these on its own even when BTC is weak - that's
+// the point of trading structure, not just the market beta.
+function chartPattern(highs, lows, closes) {
+  const n = closes.length; if (n < 30) return null;
+  const k = 3, tol = 0.035, lookback = 70, price = closes[n - 1];
+  // Double bottom: two similar swing lows with a peak (neckline) between; bullish
+  // once price closes back above that neckline.
+  const lp = pivotIdx(lows, k, "low").filter((i) => i >= n - lookback);
+  if (lp.length >= 2) {
+    const b1 = lp[lp.length - 2], b2 = lp[lp.length - 1], l1 = lows[b1], l2 = lows[b2];
+    if (b2 - b1 >= k * 2 && Math.abs(l1 - l2) / Math.min(l1, l2) <= tol) {
+      const neck = Math.max(...highs.slice(b1, b2 + 1));
+      if (neck > Math.max(l1, l2) * 1.01) return { name: "Double bottom", bias: "bull", confirmed: price > neck, neckline: rp(neck), lows: [rp(l1), rp(l2)] };
+    }
+  }
+  // Double top: two similar swing highs with a trough (neckline) between; bearish
+  // once price closes back below that neckline.
+  const hp = pivotIdx(highs, k, "high").filter((i) => i >= n - lookback);
+  if (hp.length >= 2) {
+    const t1 = hp[hp.length - 2], t2 = hp[hp.length - 1], h1 = highs[t1], h2 = highs[t2];
+    if (t2 - t1 >= k * 2 && Math.abs(h1 - h2) / Math.max(h1, h2) <= tol) {
+      const neck = Math.min(...lows.slice(t1, t2 + 1));
+      if (neck < Math.min(h1, h2) * 0.99) return { name: "Double top", bias: "bear", confirmed: price < neck, neckline: rp(neck), highs: [rp(h1), rp(h2)] };
+    }
+  }
+  return null;
+}
 
 // ===========================================================================
 // FX (USD -> LKR)
@@ -335,12 +373,24 @@ function computeSignal(base, tf, d, fx, opts = {}) {
 
   const up = ema200 != null && price > ema200 && ema50 > ema200;
   const down = ema200 != null && price < ema200 && ema50 < ema200;
+  const cpat = chartPattern(highs, lows, closes);   // double bottom / double top structure
   let direction = up ? "LONG" : down ? "SHORT" : "NEUTRAL";
+  let reversal = false;
+  // Pattern reversal: when the EMA trend is undecided, a CONFIRMED double bottom /
+  // top gives a direction on the coin's own structure (independent of BTC). Opt-in.
+  if (direction === "NEUTRAL" && settings.patternTrades && cpat && cpat.confirmed) {
+    direction = cpat.bias === "bull" ? "LONG" : "SHORT"; reversal = true;
+  }
   const reasons = [];
   let conf = 0;
   if (direction !== "NEUTRAL") {
     const long = direction === "LONG";
-    conf += 32; reasons.push(long ? "Uptrend (price>EMA200, EMA50>EMA200)" : "Downtrend (price<EMA200, EMA50<EMA200)");
+    if (reversal) { conf += 30; reasons.push(`${cpat.name} confirmed (reversal on the coin's own structure, neckline ${cpat.neckline})`); }
+    else { conf += 32; reasons.push(long ? "Uptrend (price>EMA200, EMA50>EMA200)" : "Downtrend (price<EMA200, EMA50<EMA200)"); }
+    // Chart-pattern confluence: a double bottom under a long / double top under a
+    // short adds conviction (more when confirmed = neckline already broken).
+    if (cpat && ((long && cpat.bias === "bull") || (!long && cpat.bias === "bear"))) { const b = cpat.confirmed ? 12 : 6; conf += b; if (!reversal) reasons.push(`${cpat.name}${cpat.confirmed ? " confirmed" : " forming"}`); }
+    else if (cpat && !reversal) { conf -= 6; reasons.push(`${cpat.name} against the trade (caution)`); }
     if ((long && ema20 > ema50) || (!long && ema20 < ema50)) { conf += 14; reasons.push("Fast EMAs aligned"); }
     if (mac && ((long && mac.hist > 0) || (!long && mac.hist < 0))) { conf += 14; reasons.push("MACD momentum with trend"); }
     if (vw != null && ((long && price > vw) || (!long && price < vw))) { conf += 8; reasons.push("On trend side of VWAP"); }
@@ -374,7 +424,7 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
-  const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: rp(price), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, patterns, htf: opts.htf || null, htfDir: opts.htfDir || null, generatedAt: new Date().toISOString() };
+  const out = { base, symbol: base, tf, direction, confidence: conf, priceUsd: rp(price), priceLkr: round(price * fx, 2), changePct: null, indicators, forecast, reasons, patterns, chartPattern: cpat, reversal, htf: opts.htf || null, htfDir: opts.htfDir || null, generatedAt: new Date().toISOString() };
   if (direction === "NEUTRAL" || !a) return { ...out, note: "No trend / setup - stand aside." };
 
   const long = direction === "LONG";
@@ -830,13 +880,19 @@ async function trackedIndex() {
 // The Track Record now logs a trade only if it passes the SAME discipline the paper
 // book uses - so it stops filling with doomed longs in a market-wide dump and with
 // low-liquidity junk (the -20/-30% outliers). Keeps Track and paper consistent.
+// A CONFIRMED chart pattern aligned with the trade lets it ignore the market regime
+// (the coin has its own structure - it isn't just following BTC).
+function patternOverride(s) {
+  return settings.patternTrades && s.chartPattern && s.chartPattern.confirmed &&
+    ((s.direction === "LONG" && s.chartPattern.bias === "bull") || (s.direction === "SHORT" && s.chartPattern.bias === "bear"));
+}
 function trackEligible(s) {
   if (s.direction !== "LONG" && s.direction !== "SHORT") return false;
   if (s.confidence < TRACK_MIN_CONFIDENCE || !s.entry || !s.targets) return false;
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;  // no illiquid junk
   if (!s.quality || s.quality.score < 3) return false;                                          // good coins only (Blue-chip / Solid)
-  if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") return false;  // don't log longs into a falling market
-  if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s.direction === "SHORT") return false;  // don't fight a rising market
+  if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG" && !patternOverride(s)) return false;  // longs paused in a falling market - unless the coin's own pattern says otherwise
+  if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s.direction === "SHORT" && !patternOverride(s)) return false;  // don't fight a rising market
   if (fngBlocks(s.direction)) return false;                                                     // extreme greed/fear guard
   if (!momentumOk(s)) return false;                                                             // needs a real push (if enabled)
   return true;
@@ -966,6 +1022,7 @@ const settings = {
   fngMinShort: Number(process.env.FNG_MIN_SHORT || 20),                           // block new SHORTs when Fear & Greed <= this (extreme fear)
   momentumFilter: /^(1|true|yes|on)$/i.test(process.env.MOMENTUM_FILTER || ""),   // require a real momentum/volume push on the entry candle (skips limp, choppy setups)
   paperApproval: /^(1|true|yes|on)$/i.test(process.env.PAPER_APPROVAL || ""),     // ask on Telegram before opening each paper/futures trade (pick size + leverage, see est. profit/loss)
+  patternTrades: /^(1|true|yes|on)$/i.test(process.env.PATTERN_TRADES || ""),     // also trade confirmed chart patterns (double bottom/top) on a coin's own structure, independent of BTC/regime
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1269,11 +1326,12 @@ async function fillPaper(signals) {
   if (killSwitchLocked("spot")) return;                                      // book flattened & locked for the day
   if (!entryGate().allow) return;                                            // session / weekend / daily-open guard
   if (fngBlocks("LONG")) return;                                             // extreme greed - don't buy the top
-  if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;     // don't buy into a risk-off market
   if (dailyHalted((await paperDaily()).net, settings.capitalUsd)) return;    // daily loss circuit breaker
+  const riskOff = settings.regimeFilter && marketRegime.tier === "RISK_OFF"; // spot normally sits in cash when risk-off...
   const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
   const ranked = signals.filter(paperEligible).sort((a, b) => paperScore(b) - paperScore(a));
   for (const s0 of ranked) {
+    if (riskOff && !patternOverride(s0)) continue;                           // ...unless the coin prints its own confirmed bullish pattern
     if (await pstore.countOpen() >= settings.paperMaxOpen) break;            // portfolio full
     const open = await pstore.openTrades();
     if (sameDirCount(open, "LONG") >= settings.maxSameDir) break;            // correlation cap (spot = all long)
@@ -1622,8 +1680,8 @@ async function fillFutures(signals) {
     const acct = await futuresAccount();
     if (acct.cash < 1) break;
     if (fngBlocks(s0.direction)) continue;                                   // extreme greed on a long / extreme fear on a short
-    if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s0.direction === "LONG") continue; // trade with the trend
-    if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s0.direction === "SHORT") continue;
+    if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s0.direction === "LONG" && !patternOverride(s0)) continue; // trade with the trend (unless the coin's own pattern says otherwise)
+    if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s0.direction === "SHORT" && !patternOverride(s0)) continue;
     const open = await fstore.openTrades();
     if (sameDirCount(open, s0.direction) >= settings.maxSameDir) continue;   // correlation cap per direction
     if (await fstore.hasOpen(s0.symbol)) continue;                           // already holding it (one trade per coin, any timeframe)
@@ -1821,7 +1879,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, entry: entryStatus(), trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, patternTrades: settings.patternTrades, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, entry: entryStatus(), trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1861,6 +1919,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.fngFilter === "boolean") settings.fngFilter = b.fngFilter;
   if (typeof b.momentumFilter === "boolean") settings.momentumFilter = b.momentumFilter;
   if (typeof b.paperApproval === "boolean") settings.paperApproval = b.paperApproval;
+  if (typeof b.patternTrades === "boolean") settings.patternTrades = b.patternTrades;
   numSet("dailyOpenGuardMin", 0, 120); numSet("fundingRatePct", 0, 1); numSet("killSwitchPct", 0, 100); numSet("liqBufferPct", 0, 50);
   numSet("maxHoldHours", 0, 336); numSet("fngMaxLong", 50, 100); numSet("fngMinShort", 0, 50);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
@@ -2386,4 +2445,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias, chartPattern, pivotIdx, patternOverride };
