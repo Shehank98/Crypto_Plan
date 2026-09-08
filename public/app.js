@@ -761,6 +761,7 @@ async function loadSettings() {
     if ($("gd-bt")) $("gd-bt").checked = !!s.backtestGate;
     if ($("gd-btwin") && s.backtestMinWin != null) $("gd-btwin").value = s.backtestMinWin;
     if ($("gd-bttr") && s.backtestMinTrades != null) $("gd-bttr").value = s.backtestMinTrades;
+    if ($("gd-univ") && s.universeSize != null) $("gd-univ").value = s.universeSize;
     const gd = { "gd-open": s.dailyOpenGuardMin, "gd-fund": s.fundingRatePct, "gd-kill": s.killSwitchPct, "gd-liq": s.liqBufferPct, "gd-hold": s.maxHoldHours, "gd-fngmax": s.fngMaxLong, "gd-fngmin": s.fngMinShort };
     for (const [id, v] of Object.entries(gd)) if ($(id) && v != null) $(id).value = v;
     if ($("gd-fngnow")) $("gd-fngnow").textContent = s.fearGreed ? `· now ${s.fearGreed.value} (${s.fearGreed.cls})` : "";
@@ -812,7 +813,7 @@ async function saveRiskModel() {
 }
 async function saveGuards() {
   try {
-    await api2("/api/settings", { sessionFilter: $("gd-session").checked, weekendGuard: $("gd-weekend").checked, liqAutoDerisk: $("gd-derisk").checked, dailyOpenGuardMin: Number($("gd-open").value) || 0, fundingRatePct: Number($("gd-fund").value) || 0, killSwitchPct: Number($("gd-kill").value) || 0, liqBufferPct: Number($("gd-liq").value) || 0, maxHoldHours: Number($("gd-hold").value) || 0, fngFilter: $("gd-fng").checked, fngMaxLong: Number($("gd-fngmax").value) || 80, fngMinShort: Number($("gd-fngmin").value) || 20, momentumFilter: $("gd-mom").checked, patternTrades: $("gd-pattern").checked, backtestGate: $("gd-bt").checked, backtestMinWin: Number($("gd-btwin").value) || 55, backtestMinTrades: Number($("gd-bttr").value) || 10 });
+    await api2("/api/settings", { sessionFilter: $("gd-session").checked, weekendGuard: $("gd-weekend").checked, liqAutoDerisk: $("gd-derisk").checked, dailyOpenGuardMin: Number($("gd-open").value) || 0, fundingRatePct: Number($("gd-fund").value) || 0, killSwitchPct: Number($("gd-kill").value) || 0, liqBufferPct: Number($("gd-liq").value) || 0, maxHoldHours: Number($("gd-hold").value) || 0, fngFilter: $("gd-fng").checked, fngMaxLong: Number($("gd-fngmax").value) || 80, fngMinShort: Number($("gd-fngmin").value) || 20, momentumFilter: $("gd-mom").checked, patternTrades: $("gd-pattern").checked, backtestGate: $("gd-bt").checked, backtestMinWin: Number($("gd-btwin").value) || 55, backtestMinTrades: Number($("gd-bttr").value) || 10, universeSize: Number($("gd-univ").value) || 100 });
     $("gd-status").innerHTML = '<span class="text-emerald-400">✓ Saved</span>';
     loadSettings();
   } catch (e) { $("gd-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }

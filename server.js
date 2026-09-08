@@ -687,7 +687,7 @@ async function scanMarket(tf, force) {
   if (scanning && cached) return cached.data;
   scanning = true;
   try {
-    const [fx, universe] = await Promise.all([getUsdLkr(), getUniverse(UNIVERSE_SIZE)]);
+    const [fx, universe] = await Promise.all([getUsdLkr(), getUniverse(settings.universeSize || UNIVERSE_SIZE)]);
     // Multi-timeframe confluence: bias each signal by the higher-TF trend (reuses
     // that TF's cached scan - no extra fetches). Ensure the higher TF stays scanned.
     const htf = HTF_OF[tf];
@@ -1012,6 +1012,7 @@ const settings = {
   positionUsd: Number(process.env.POSITION_USD || 20),   // $ margin you'd put per trade
   leverage: Number(process.env.LEVERAGE || 20),          // futures leverage used in the profit/loss projection
   capitalUsd: Number(process.env.CAPITAL_USD || 200),    // total capital (context / risk sizing)
+  universeSize: Number(process.env.UNIVERSE_SIZE || 100), // how many top-volume coins to scan across the market (wider = more opportunities, more load)
   paperTrading: !/^(0|false|no|off)$/i.test(process.env.PAPER_TRADING || "true"), // simulate spot trades in-app (no exchange)
   paperMaxOpen: Number(process.env.PAPER_MAX_OPEN || 5),        // max concurrent paper positions
   paperPositionUsd: Number(process.env.PAPER_POSITION_USD || 20), // $ spent per SPOT trade (buy this much of the coin)
@@ -1865,7 +1866,7 @@ const forex = createForex({ http, pool, useDb: () => useDb, round });
 app.use("/api/forex", forex.router);
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok", source: ACTIVE?.name || null, durable: useDb, dbError }));
-app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, trackMinConfidence: TRACK_MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, dbError, scanIntervalSec: SCAN_INTERVAL_SEC, indicatorRefreshSec: INDICATOR_REFRESH_SEC }));
+app.get("/api/config", (_req, res) => res.json({ quote: QUOTE, universeSize: settings.universeSize || UNIVERSE_SIZE, tf: SIGNAL_TF, timeframes: TIMEFRAMES, minConfidence: MIN_CONFIDENCE, trackMinConfidence: TRACK_MIN_CONFIDENCE, source: ACTIVE?.name || null, durable: useDb, dbError, scanIntervalSec: SCAN_INTERVAL_SEC, indicatorRefreshSec: INDICATOR_REFRESH_SEC }));
 
 app.get("/api/signals", wrap(async (req, res) => {
   const tf = TF_MINUTES[req.query.tf] ? req.query.tf : SIGNAL_TF;
@@ -1946,7 +1947,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, patternTrades: settings.patternTrades, backtestGate: settings.backtestGate, backtestMinWin: settings.backtestMinWin, backtestMinTrades: settings.backtestMinTrades, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, entry: entryStatus(), trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, patternTrades: settings.patternTrades, backtestGate: settings.backtestGate, backtestMinWin: settings.backtestMinWin, backtestMinTrades: settings.backtestMinTrades, universeSize: settings.universeSize, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, entry: entryStatus(), trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1988,7 +1989,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.paperApproval === "boolean") settings.paperApproval = b.paperApproval;
   if (typeof b.patternTrades === "boolean") settings.patternTrades = b.patternTrades;
   if (typeof b.backtestGate === "boolean") settings.backtestGate = b.backtestGate;
-  numSet("backtestMinWin", 0, 100); numSet("backtestMinTrades", 1, 500);
+  numSet("backtestMinWin", 0, 100); numSet("backtestMinTrades", 1, 500); numSet("universeSize", 20, 250);
   numSet("dailyOpenGuardMin", 0, 120); numSet("fundingRatePct", 0, 1); numSet("killSwitchPct", 0, 100); numSet("liqBufferPct", 0, 50);
   numSet("maxHoldHours", 0, 336); numSet("fngMaxLong", 50, 100); numSet("fngMinShort", 0, 50);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
