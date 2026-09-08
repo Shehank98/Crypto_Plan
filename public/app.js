@@ -771,6 +771,7 @@ async function loadMarket() {
 let tradeQuote = null;
 async function openTradeDialog(sym, tf, book) {
   const m = $("trade-modal");
+  if (!m || !$("trade-proj")) { const st = $("market-status"); if (st) st.innerHTML = '<span class="text-amber-400">Hard-refresh the page (Ctrl/Cmd+Shift+R) to load the new trade dialog.</span>'; return; }
   $("trade-msg").textContent = ""; $("trade-proj").innerHTML = "Loading…";
   m.classList.remove("hidden"); m.classList.add("flex");
   let q; try { q = await api(`/api/scan/quote?book=${book}&symbol=${encodeURIComponent(sym)}&tf=${tf}`); } catch (e) { $("trade-proj").innerHTML = `<span class="text-rose-400">${e.message}</span>`; return; }
