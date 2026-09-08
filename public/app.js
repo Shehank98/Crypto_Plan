@@ -744,7 +744,7 @@ async function loadMarket() {
   $("market-table").innerHTML = `<thead><tr class="text-left text-xs uppercase text-slate-500">
       <th>#</th><th>Coin</th><th>TF</th><th>Dir</th><th class="text-right">Conf</th><th>Quality</th><th>Window</th>
       <th class="text-right">Entry</th><th class="text-right">TP1</th><th class="text-right">Gain</th><th class="text-right">R:R</th>
-      <th class="text-right">ETA</th><th>Pattern</th><th class="text-right">Win% (bt)</th></tr></thead><tbody>${d.rows.map((r, i) => `
+      <th class="text-right">ETA</th><th>Pattern</th><th class="text-right">Win% (bt)</th><th>Trade</th></tr></thead><tbody>${d.rows.map((r, i) => `
       <tr class="cursor-pointer border-b border-edge/60 hover:bg-edge/40" data-analyze="${r.symbol.replace(/USDT$/, "")}" data-tf="${r.tf}">
         <td class="py-1.5 text-slate-500">${i + 1}</td>
         <td class="py-1.5 font-semibold">${r.symbol}</td>
@@ -760,8 +760,22 @@ async function loadMarket() {
         <td class="py-1.5 text-right text-xs text-slate-400">${r.etaLabel || "-"}</td>
         <td class="py-1.5 text-xs">${r.pattern ? `<span class="${r.pattern.bias === "bull" ? "text-emerald-400" : "text-rose-400"}">${r.pattern.bias === "bull" ? "📈" : "📉"} ${r.pattern.name}${r.pattern.confirmed ? " ✓" : ""}</span>` : '<span class="text-slate-600">-</span>'}</td>
         <td class="py-1.5 text-right tabular-nums ${r.winRatePct == null ? "text-slate-600" : r.winRatePct >= 55 ? "text-emerald-400" : "text-slate-400"}">${r.winRatePct == null ? "-" : r.winRatePct + "%"}${r.btTrades ? `<span class="text-[11px] text-slate-500"> (${r.btTrades})</span>` : ""}</td>
+        <td class="py-1.5 whitespace-nowrap">${r.window === "OPEN" ? `${r.direction === "LONG" ? `<button data-trade="spot" data-sym="${r.symbol}" data-tf="${r.tf}" class="mr-1 rounded border border-emerald-700/60 px-2 py-0.5 text-xs text-emerald-300 hover:bg-emerald-900/30">Spot</button>` : ""}<button data-trade="futures" data-sym="${r.symbol}" data-tf="${r.tf}" class="rounded border border-sky-700/60 px-2 py-0.5 text-xs text-sky-300 hover:bg-sky-900/30">Fut</button>` : '<span class="text-[11px] text-slate-600">wait</span>'}</td>
       </tr>`).join("")}</tbody>`;
   $("market-table").querySelectorAll("[data-analyze]").forEach((el) => (el.onclick = () => openAnalysis(el.dataset.analyze, el.dataset.tf)));
+  $("market-table").querySelectorAll("[data-trade]").forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
+    const book = b.dataset.trade, sym = b.dataset.sym, tf = b.dataset.tf;
+    b.disabled = true; b.textContent = "…";
+    try {
+      const r = await api2("/api/scan/trade", { book, symbol: sym, tf });
+      const size = book === "futures" ? `$${r.margin} ${r.leverage}x` : `$${r.cost}`;
+      $("market-status").innerHTML = `<span class="text-emerald-400">✓ ${book === "futures" ? "Futures" : "Spot"} ${sym} opened @ ${usd(r.entry)} (${size})</span>`;
+    } catch (err) {
+      $("market-status").innerHTML = `<span class="text-rose-400">✗ ${err.message}</span>`;
+    }
+    setTimeout(loadMarket, 1200);
+  }));
   { const b = $("market-refresh"); if (b) b.onclick = loadMarket; }
 }
 

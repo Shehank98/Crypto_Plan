@@ -2160,6 +2160,43 @@ app.get("/api/scan", wrap(async (req, res) => {
   });
   res.json({ regime: marketRegime, stance: marketStance(), scanned: all.length, universe: settings.universeSize, rows });
 }));
+
+// One-click "Trade this" from the Market Scan: manually open a setup in the chosen
+// paper book. A manual click IS the decision, so it bypasses the auto-filters
+// (regime / session / backtest gate) - but still honours the honest fill (must be
+// enterable now), one-per-coin, cross-book, max-open, and your size/leverage.
+app.post("/api/scan/trade", wrap(async (req, res) => {
+  const book = req.body && req.body.book === "futures" ? "futures" : "spot";
+  const symbol = String((req.body && req.body.symbol) || "").toUpperCase();
+  const tf = req.body && req.body.tf;
+  if (!symbol || !TF_MINUTES[tf]) { res.status(400).json({ ok: false, error: "symbol and timeframe required" }); return; }
+  const data = scanCache[tf] && scanCache[tf].data;
+  let sig = data && data.signals.find((s) => s.symbol === symbol);
+  if (!sig || (sig.direction !== "LONG" && sig.direction !== "SHORT") || !sig.entry || !sig.targets) { res.status(400).json({ ok: false, error: "no live setup for that coin/timeframe" }); return; }
+  if (book === "spot" && sig.direction !== "LONG") { res.status(400).json({ ok: false, error: "spot is long-only - use Futures for a short" }); return; }
+  const prices = await getTickerMap().catch(() => new Map());
+  const P = prices.get(symbol);
+  if (P != null) sig = reclassifyEntry(sig, P);
+  if (sig.entry.window !== "OPEN") { res.status(400).json({ ok: false, error: `not enterable now (${sig.entry.window}) - price isn't in the entry zone` }); return; }
+  if (await pstore.hasOpen(symbol) || await fstore.hasOpen(symbol)) { res.status(400).json({ ok: false, error: "already holding this coin (spot or futures)" }); return; }
+  if (book === "spot") {
+    if (await pstore.countOpen() >= settings.paperMaxOpen) { res.status(400).json({ ok: false, error: "spot portfolio full (max open)" }); return; }
+    const a = await paperAccount(), equity = a.start + a.realized;
+    const sized = settings.riskSizing ? riskBasedCost({ equity, cashAvail: a.cash, stopRiskPct: sig.stop.riskPct, confidence: sig.confidence, leverage: 1 }) : settings.paperPositionUsd;
+    const cost = Math.min(sized, settings.paperPositionUsd, a.cash);
+    if (cost < 1) { res.status(400).json({ ok: false, error: "no cash available" }); return; }
+    const id = await openPaper(sig, cost);
+    res.json({ ok: true, book, id, symbol, entry: sig.entry.mid, cost: round(cost, 2) });
+  } else {
+    if (await fstore.countOpen() >= settings.futuresMaxOpen) { res.status(400).json({ ok: false, error: "futures portfolio full (max open)" }); return; }
+    const a = await futuresAccount(), equity = a.start + a.realized, lev = Math.max(1, settings.futuresLeverage);
+    const sized = settings.riskSizing ? riskBasedCost({ equity, cashAvail: a.cash, stopRiskPct: sig.stop.riskPct, confidence: sig.confidence, leverage: lev }) : settings.futuresMarginUsd;
+    const margin = Math.min(sized, settings.futuresMarginUsd, a.cash);
+    if (margin < 1) { res.status(400).json({ ok: false, error: "no margin cash available" }); return; }
+    const id = await openFutures(sig, margin, lev);
+    res.json({ ok: true, book, id, symbol, entry: sig.entry.mid, margin: round(margin, 2), leverage: lev });
+  }
+}));
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());
