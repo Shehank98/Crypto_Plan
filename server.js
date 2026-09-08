@@ -566,11 +566,14 @@ function computeRegime(signals) {
   const breadthPct = round((longs / total) * 100, 0);
   const btc = signals.find((s) => s.base === "BTC");
   const btcDir = btc && !btc.error ? btc.direction : "NEUTRAL";
+  // BTC below its own EMA200 = the market leader is weak; treat as risk-off even if
+  // it hasn't printed a full SHORT signal yet (catches the roll-over earlier).
+  const btcWeak = !!(btc && !btc.error && btc.indicators && btc.indicators.ema200 != null && btc.priceUsd < btc.indicators.ema200);
   let tier;
-  if (btcDir !== "SHORT" && breadthPct >= 55) tier = "RISK_ON";
-  else if (btcDir === "SHORT" || breadthPct < 35) tier = "RISK_OFF";
+  if (btcDir === "SHORT" || btcWeak || breadthPct < 45) tier = "RISK_OFF";  // pause new longs earlier
+  else if (breadthPct >= 58) tier = "RISK_ON";
   else tier = "NEUTRAL";
-  return { tier, breadthPct, longs, shorts, total, btc: btcDir, at: Date.now() };
+  return { tier, breadthPct, longs, shorts, total, btc: btcDir, btcWeak, at: Date.now() };
 }
 
 // Re-judge a signal's entry window against a LIVE price (pure - returns a new
@@ -824,11 +827,23 @@ async function trackedIndex() {
   return m;
 }
 
+// The Track Record now logs a trade only if it passes the SAME discipline the paper
+// book uses - so it stops filling with doomed longs in a market-wide dump and with
+// low-liquidity junk (the -20/-30% outliers). Keeps Track and paper consistent.
+function trackEligible(s) {
+  if (s.direction !== "LONG" && s.direction !== "SHORT") return false;
+  if (s.confidence < TRACK_MIN_CONFIDENCE || !s.entry || !s.targets) return false;
+  if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;  // no illiquid junk
+  if (!s.quality || s.quality.score < 3) return false;                                          // good coins only (Blue-chip / Solid)
+  if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s.direction === "LONG") return false;  // don't log longs into a falling market
+  if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s.direction === "SHORT") return false;  // don't fight a rising market
+  if (fngBlocks(s.direction)) return false;                                                     // extreme greed/fear guard
+  if (!momentumOk(s)) return false;                                                             // needs a real push (if enabled)
+  return true;
+}
 async function openFrom(data) {
   for (const s of data.signals) {
-    if ((s.direction === "LONG" || s.direction === "SHORT") && s.confidence >= TRACK_MIN_CONFIDENCE && s.entry && s.targets) {
-      // Skip illiquid junk (tokenized stocks, micro-caps) - they produce the ugly outlier losses.
-      if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
+    if (trackEligible(s)) {
       await store.open(s).catch((e) => console.warn("[track]", e.message));
       if (settings.tgApproval) await proposeTrade(s).catch((e) => console.warn("[propose]", e.message)); // ask on Telegram first
       else await maybeAutoTrade(s).catch((e) => console.warn("[testnet]", e.message));
@@ -2356,4 +2371,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime };
