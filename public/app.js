@@ -495,7 +495,10 @@ async function openChart(sym, tfv) {
     sig.targets.forEach((t) => line(t.priceUsd, "#10b981", 2, `${t.name} (${t.rr}R)`));
     // Fibonacci golden-pocket (0.5-0.618) as dotted reference lines.
     if (sig.fib) { line(sig.fib.retr["0.5"], "#a78bfa", 3, "Fib 0.5"); line(sig.fib.retr["0.618"], "#a78bfa", 3, "Fib 0.618"); }
+    // Chart pattern neckline (double bottom/top, breakout, flag).
+    if (sig.chartPattern && sig.chartPattern.neckline) line(sig.chartPattern.neckline, sig.chartPattern.bias === "bull" ? "#34d399" : "#fb7185", 1, `${sig.chartPattern.name} neckline`);
     $("chart-plan").innerHTML = [
+      sig.chartPattern ? `<span class="pill ${sig.chartPattern.bias === "bull" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${sig.chartPattern.bias === "bull" ? "📈" : "📉"} ${sig.chartPattern.name}${sig.chartPattern.confirmed ? " ✓" : ""}</span>` : "",
       `<span class="pill ${sig.direction === "LONG" ? "bg-emerald-900 text-emerald-200" : "bg-rose-900 text-rose-200"}">${sig.direction} ${sig.confidence}%</span>`,
       `<span class="pill bg-slate-800">Entry ${usd(sig.entry.low)}-${usd(sig.entry.high)}</span>`,
       `<span class="pill bg-slate-800 text-rose-300">Stop ${usd(sig.stop.priceUsd)} (-${sig.stop.riskPct}%)</span>`,
@@ -623,6 +626,7 @@ async function openAnalysis(sym, tfv) {
       <span class="text-sm text-slate-400">Price ${usd(s.priceUsd)}</span>
       ${s.quality ? `${qualityBadge(s.quality)}<span class="text-xs text-slate-500">vol ${fmtVol(s.liquidityUsd)} · ${s.quality.atrPct ?? "?"}%/candle</span>` : ""}
       ${s.htf && s.htfDir ? `<span class="pill bg-slate-800 text-xs">${s.htfDir === s.direction ? "✅" : "⚠️"} ${s.htf} trend ${s.htfDir}</span>` : ""}
+      ${s.chartPattern ? `<span class="pill text-xs" style="border:1px solid ${s.chartPattern.bias === "bull" ? "rgba(16,185,129,.5)" : "rgba(244,63,94,.5)"};color:${s.chartPattern.bias === "bull" ? "#6ee7b7" : "#fda4af"}">${s.chartPattern.bias === "bull" ? "📈" : "📉"} ${s.chartPattern.name}${s.chartPattern.confirmed ? " ✓ confirmed" : " · forming"}${s.chartPattern.neckline ? ` · neckline ${usd(s.chartPattern.neckline)}` : ""}</span>` : ""}
     </div>
     <div class="mb-4 h-2 w-full overflow-hidden rounded bg-slate-800"><div style="width:${s.confidence ?? 0}%;background:${d.bar}" class="h-full"></div></div>
     ${timingBlock}

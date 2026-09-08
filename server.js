@@ -169,11 +169,10 @@ function pivotIdx(arr, k, kind) {
 // Multi-bar CHART patterns (structure, not single candles): double bottom (W) and
 // double top (M). A coin can print these on its own even when BTC is weak - that's
 // the point of trading structure, not just the market beta.
-function chartPattern(highs, lows, closes) {
-  const n = closes.length; if (n < 30) return null;
-  const k = 3, tol = 0.035, lookback = 70, price = closes[n - 1];
-  // Double bottom: two similar swing lows with a peak (neckline) between; bullish
-  // once price closes back above that neckline.
+// Double bottom (W) / double top (M): two similar swing lows/highs with a neckline
+// between; confirmed once price closes back through the neckline.
+function detectDoubleBT(highs, lows, closes) {
+  const n = closes.length, k = 3, tol = 0.035, lookback = 70, price = closes[n - 1];
   const lp = pivotIdx(lows, k, "low").filter((i) => i >= n - lookback);
   if (lp.length >= 2) {
     const b1 = lp[lp.length - 2], b2 = lp[lp.length - 1], l1 = lows[b1], l2 = lows[b2];
@@ -182,8 +181,6 @@ function chartPattern(highs, lows, closes) {
       if (neck > Math.max(l1, l2) * 1.01) return { name: "Double bottom", bias: "bull", confirmed: price > neck, neckline: rp(neck), lows: [rp(l1), rp(l2)] };
     }
   }
-  // Double top: two similar swing highs with a trough (neckline) between; bearish
-  // once price closes back below that neckline.
   const hp = pivotIdx(highs, k, "high").filter((i) => i >= n - lookback);
   if (hp.length >= 2) {
     const t1 = hp[hp.length - 2], t2 = hp[hp.length - 1], h1 = highs[t1], h2 = highs[t2];
@@ -193,6 +190,40 @@ function chartPattern(highs, lows, closes) {
     }
   }
   return null;
+}
+// Range breakout: a tight consolidation (recent ~20 bars) that the latest bar
+// closes out of - up (breakout) or down (breakdown).
+function detectBreakout(highs, lows, closes) {
+  const n = closes.length; if (n < 25) return null;
+  const w = 20, hiSeg = highs.slice(n - w - 1, n - 1), loSeg = lows.slice(n - w - 1, n - 1);
+  const res = Math.max(...hiSeg), sup = Math.min(...loSeg), mid = (res + sup) / 2, price = closes[n - 1];
+  if (mid <= 0 || (res - sup) / mid * 100 > 12) return null;                 // only a genuinely tight range counts
+  if (price > res * 1.002) return { name: "Range breakout", bias: "bull", confirmed: true, neckline: rp(res) };
+  if (price < sup * 0.998) return { name: "Range breakdown", bias: "bear", confirmed: true, neckline: rp(sup) };
+  return null;
+}
+// Bull / bear flag: a strong impulse (pole) then a shallow counter-pullback (flag),
+// then a break in the pole's direction = continuation.
+function detectFlag(highs, lows, closes) {
+  const n = closes.length; if (n < 20) return null;
+  const price = closes[n - 1], poleStart = closes[n - 12], poleEnd = closes[n - 6];
+  if (!poleStart) return null;
+  const polePct = (poleEnd - poleStart) / poleStart * 100;
+  const flagHi = Math.max(...highs.slice(n - 6, n - 1)), flagLo = Math.min(...lows.slice(n - 6, n - 1));
+  if (polePct > 6) {                                                         // up pole
+    const pull = (poleEnd - flagLo) / poleEnd * 100;                         // pullback depth
+    if (pull >= 0 && pull < polePct * 0.6 && price > flagHi) return { name: "Bull flag", bias: "bull", confirmed: true, neckline: rp(flagHi) };
+  } else if (polePct < -6) {                                                 // down pole
+    const bounce = (flagHi - poleEnd) / Math.abs(poleEnd) * 100;
+    if (bounce >= 0 && bounce < Math.abs(polePct) * 0.6 && price < flagLo) return { name: "Bear flag", bias: "bear", confirmed: true, neckline: rp(flagLo) };
+  }
+  return null;
+}
+// Best structural pattern right now: reversal (double top/bottom) first, then a
+// range breakout, then a continuation flag.
+function chartPattern(highs, lows, closes) {
+  if (closes.length < 30) return null;
+  return detectDoubleBT(highs, lows, closes) || detectBreakout(highs, lows, closes) || detectFlag(highs, lows, closes) || null;
 }
 
 // ===========================================================================
@@ -2445,4 +2476,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias, chartPattern, pivotIdx, patternOverride };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias, chartPattern, pivotIdx, patternOverride, detectDoubleBT, detectBreakout, detectFlag };
