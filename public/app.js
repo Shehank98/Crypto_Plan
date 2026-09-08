@@ -782,7 +782,7 @@ async function saveGuards() {
 }
 async function testConnection() {
   $("set-status").textContent = "Testing…";
-  try { const r = await api2("/api/settings/test", {}); $("set-status").innerHTML = r.ok ? `<span class="text-emerald-400">✓ Connected. Tradeable ${r.usdtFree} USDT on testnet.</span>` : `<span class="text-rose-400">${r.error}</span>`; }
+  try { const r = await api2("/api/settings/test", {}); $("set-status").innerHTML = r.ok ? `<span class="text-emerald-400">✓ Connected ${r.route ? "(" + r.route + ")" : ""}. Tradeable ${r.usdtFree} USDT on testnet.</span>` : `<span class="text-rose-400">${r.error}</span>`; }
   catch (e) { $("set-status").innerHTML = `<span class="text-rose-400">${e.message}</span>`; }
 }
 async function clearKeys() {

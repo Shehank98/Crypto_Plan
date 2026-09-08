@@ -979,15 +979,16 @@ function niceTnError(e) {
 // it via the proxy can trip an IP-restricted key, so it's toggleable.
 function tnProxyCfg() { return settings.proxyTestnet ? proxyCfg() : {}; }
 async function tnPublic(pathname, params) { const r = await http.get(settings.testnetBase + pathname, { params, ...tnProxyCfg() }); return r.data; }
-async function tnSigned(method, pathname, params = {}) {
+async function tnSigned(method, pathname, params = {}, cfgOverride) {
   if (!tnConfigured()) throw new Error("Testnet API keys not set");
   const query = new URLSearchParams({ ...params, timestamp: Date.now(), recvWindow: 5000 }).toString();
   const signature = crypto.createHmac("sha256", settings.apiSecret).update(query).digest("hex");
   const url = `${settings.testnetBase}${pathname}?${query}&signature=${signature}`;
-  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey }, ...tnProxyCfg() });
+  const cfg = cfgOverride !== undefined ? cfgOverride : tnProxyCfg();       // let callers force direct ({}) or via-proxy
+  const r = await http({ method, url, headers: { "X-MBX-APIKEY": settings.apiKey }, ...cfg });
   return r.data;
 }
-async function tnAccount() { return tnSigned("get", "/api/v3/account"); }
+async function tnAccount(cfgOverride) { return tnSigned("get", "/api/v3/account", {}, cfgOverride); }
 async function tnFree(asset) { const a = await tnAccount(); const b = (a.balances || []).find((x) => x.asset === asset); return b ? +b.free : 0; }
 const tnStepCache = {};
 async function tnStep(symbol) {
@@ -1760,12 +1761,26 @@ app.post("/api/settings", wrap(async (req, res) => {
 // Verify the keys against the testnet and report tradeable USDT balance.
 app.post("/api/settings/test", wrap(async (_req, res) => {
   if (!tnConfigured()) { res.status(400).json({ ok: false, error: "Enter your Testnet API key and secret first." }); return; }
-  try {
-    const a = await tnAccount();
-    const usdt = (a.balances || []).find((x) => x.asset === QUOTE);
+  // Try BOTH routings so you don't have to guess: direct from the host, and via
+  // the proxy (if one is set). Whichever the keys accept, we lock in and save.
+  const attempt = async (useProxy) => {
+    try { return { ok: true, useProxy, a: await tnAccount(useProxy ? proxyCfg() : {}) }; }
+    catch (e) { return { ok: false, useProxy, err: niceTnError(e) }; }
+  };
+  const haveProxy = !!settings.proxyUrl;
+  const results = [await attempt(false), ...(haveProxy ? [await attempt(true)] : [])];
+  const win = results.find((r) => r.ok);
+  if (win) {
+    if (settings.proxyTestnet !== win.useProxy) { settings.proxyTestnet = win.useProxy; await saveSettings(); } // remember what works
+    const usdt = (win.a.balances || []).find((x) => x.asset === QUOTE);
     lastTnError = null;
-    res.json({ ok: true, canTrade: a.canTrade !== false, usdtFree: usdt ? +usdt.free : 0, accountType: a.accountType });
-  } catch (e) { lastTnError = niceTnError(e); res.status(400).json({ ok: false, error: lastTnError }); }
+    res.json({ ok: true, canTrade: win.a.canTrade !== false, usdtFree: usdt ? +usdt.free : 0, accountType: win.a.accountType, route: win.useProxy ? "via proxy" : "direct" });
+  } else {
+    // Both failed - surface the direct error (the clearest) plus a routing hint.
+    const direct = results.find((r) => !r.useProxy);
+    lastTnError = (direct && direct.err) || (results[0] && results[0].err) || "Testnet unreachable.";
+    res.status(400).json({ ok: false, error: lastTnError, triedDirect: !!direct, triedProxy: haveProxy });
+  }
 }));
 // Test one or many proxies against REAL Binance endpoints, so you can paste all
 // 10 (URL or Webshare host:port:user:pass) and see which actually get past the
