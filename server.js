@@ -704,13 +704,14 @@ const store = {
   async open(sig) {
     const t = sig.targets;
     const row = { symbol: sig.symbol, tf: sig.tf, direction: sig.direction, confidence: sig.confidence, entry_low: sig.entry.low, entry_high: sig.entry.high, entry_mid: sig.entry.mid, stop: sig.stop.priceUsd, tp1: t[0].priceUsd, tp2: t[1].priceUsd, tp3: t[2].priceUsd, eta1_min: t[0].etaMin ?? null, eta2_min: t[1].etaMin ?? null, eta3_min: t[2].etaMin ?? null };
-    // Dedup: skip if an open one exists for symbol+direction+tf.
+    // Dedup: ONE open trade per coin (any timeframe / direction) - never track the
+    // same coin twice at once.
     if (useDb) {
-      const { rows } = await pool.query("SELECT 1 FROM tracked_signals WHERE symbol=$1 AND direction=$2 AND tf=$3 AND status IN ('WAITING','ACTIVE') LIMIT 1", [row.symbol, row.direction, row.tf]);
+      const { rows } = await pool.query("SELECT 1 FROM tracked_signals WHERE symbol=$1 AND status IN ('WAITING','ACTIVE') LIMIT 1", [row.symbol]);
       if (rows.length) return;
       await pool.query(`INSERT INTO tracked_signals (symbol,tf,direction,confidence,entry_low,entry_high,entry_mid,stop,tp1,tp2,tp3,eta1_min,eta2_min,eta3_min) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [row.symbol, row.tf, row.direction, row.confidence, row.entry_low, row.entry_high, row.entry_mid, row.stop, row.tp1, row.tp2, row.tp3, row.eta1_min, row.eta2_min, row.eta3_min]);
     } else {
-      if (mem.some((m) => m.symbol === row.symbol && m.direction === row.direction && m.tf === row.tf && (m.status === "WAITING" || m.status === "ACTIVE"))) return;
+      if (mem.some((m) => m.symbol === row.symbol && (m.status === "WAITING" || m.status === "ACTIVE"))) return;
       mem.push({ id: memId++, status: "WAITING", tp1_hit: false, tp2_hit: false, tp3_hit: false, tp1_at: null, tp2_at: null, tp3_at: null, result_r: null, created_at: new Date().toISOString(), entered_at: null, closed_at: null, ...row });
     }
   },
@@ -1263,7 +1264,8 @@ async function fillPaper(signals) {
     if (sameDirCount(open, "LONG") >= settings.maxSameDir) break;            // correlation cap (spot = all long)
     const acct = await paperAccount();
     if (acct.cash < 1) break;                                                // no cash to deploy
-    if (await pstore.hasOpen(s0.symbol)) continue;                           // already holding it
+    if (await pstore.hasOpen(s0.symbol)) continue;                           // already holding it (one trade per coin, any timeframe)
+    if (await fstore.hasOpen(s0.symbol)) continue;                           // don't hold the same coin in spot AND futures
     if (reentryBlocked("spot", s0.symbol)) continue;                         // cooling off after a recent loss on this coin
     const P = prices.get(s0.symbol);
     if (P == null) continue;
@@ -1577,7 +1579,8 @@ async function fillFutures(signals) {
     if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s0.direction === "SHORT") continue;
     const open = await fstore.openTrades();
     if (sameDirCount(open, s0.direction) >= settings.maxSameDir) continue;   // correlation cap per direction
-    if (await fstore.hasOpen(s0.symbol)) continue;
+    if (await fstore.hasOpen(s0.symbol)) continue;                           // already holding it (one trade per coin, any timeframe)
+    if (await pstore.hasOpen(s0.symbol)) continue;                           // don't hold the same coin in futures AND spot
     if (reentryBlocked("futures", s0.symbol)) continue;                      // cooling off after a recent loss on this coin
     const P = prices.get(s0.symbol);
     if (P == null) continue;
@@ -2121,13 +2124,12 @@ async function openFromProposal(p) {
   const P = prices.get(p.symbol);
   if (P != null) sig = reclassifyEntry(sig, P);
   if (sig.entry.window !== "OPEN") return { ok: false, reason: "the setup expired (price left the entry zone)" };
+  if (await pstore.hasOpen(p.symbol) || await fstore.hasOpen(p.symbol)) return { ok: false, reason: "already holding this coin (spot or futures)" };
   if (p.book === "spot") {
     if (await pstore.countOpen() >= settings.paperMaxOpen) return { ok: false, reason: "portfolio is full (max open reached)" };
-    if (await pstore.hasOpen(p.symbol)) return { ok: false, reason: "already holding it" };
     await openPaper(sig, p.cost);
   } else {
     if (await fstore.countOpen() >= settings.futuresMaxOpen) return { ok: false, reason: "portfolio is full (max open reached)" };
-    if (await fstore.hasOpen(p.symbol)) return { ok: false, reason: "already holding it" };
     await openFutures(sig, p.cost, p.lev);
   }
   return { ok: true };
