@@ -949,6 +949,7 @@ const settings = {
   fngMaxLong: Number(process.env.FNG_MAX_LONG || 80),                             // block new LONGs when Fear & Greed >= this (extreme greed)
   fngMinShort: Number(process.env.FNG_MIN_SHORT || 20),                           // block new SHORTs when Fear & Greed <= this (extreme fear)
   momentumFilter: /^(1|true|yes|on)$/i.test(process.env.MOMENTUM_FILTER || ""),   // require a real momentum/volume push on the entry candle (skips limp, choppy setups)
+  paperApproval: /^(1|true|yes|on)$/i.test(process.env.PAPER_APPROVAL || ""),     // ask on Telegram before opening each paper/futures trade (pick size + leverage, see est. profit/loss)
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1276,6 +1277,7 @@ async function fillPaper(signals) {
       : settings.paperPositionUsd;
     const cost = Math.min(sized, settings.paperPositionUsd, acct.cash);
     if (cost < 1) continue;
+    if (settings.paperApproval && await proposePaper("spot", s, cost).catch(() => false)) continue; // ask on Telegram first
     await openPaper(s, cost).catch((e) => console.warn("[paper]", e.message));
   }
 }
@@ -1589,13 +1591,14 @@ async function fillFutures(signals) {
       : settings.futuresMarginUsd;
     const margin = Math.min(sizedM, settings.futuresMarginUsd, acct.cash);
     if (margin < 1) continue;
+    if (settings.paperApproval && await proposePaper("futures", s, margin).catch(() => false)) continue; // ask on Telegram first
     await openFutures(s, margin).catch((e) => console.warn("[futures]", e.message));
   }
 }
-async function openFutures(s, margin) {
+async function openFutures(s, margin, levOverride) {
   if (margin == null) { const a = await futuresAccount(); margin = Math.min(settings.futuresMarginUsd, a.cash); }
   if (margin < 1) return;
-  const lev = Math.max(1, settings.futuresLeverage), notional = round(margin * lev, 2);
+  const lev = Math.max(1, levOverride || settings.futuresLeverage), notional = round(margin * lev, 2);
   const { idx, t: tgt } = tpTarget(s, settings.futuresTpLevel);
   const long = s.direction === "LONG";
   // Fill at the LIVE price clamped into the entry zone (reclassifyEntry set
@@ -1768,7 +1771,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1807,6 +1810,7 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.liqAutoDerisk === "boolean") settings.liqAutoDerisk = b.liqAutoDerisk;
   if (typeof b.fngFilter === "boolean") settings.fngFilter = b.fngFilter;
   if (typeof b.momentumFilter === "boolean") settings.momentumFilter = b.momentumFilter;
+  if (typeof b.paperApproval === "boolean") settings.paperApproval = b.paperApproval;
   numSet("dailyOpenGuardMin", 0, 120); numSet("fundingRatePct", 0, 1); numSet("killSwitchPct", 0, 100); numSet("liqBufferPct", 0, 50);
   numSet("maxHoldHours", 0, 336); numSet("fngMaxLong", 50, 100); numSet("fngMinShort", 0, 50);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
@@ -2058,6 +2062,76 @@ async function proposeTrade(s) {
   proposals.set(key, { symbol: s.symbol, tf: s.tf, direction: s.direction, entry: s.entry.mid, tp1: s.targets[0].priceUsd, gain1, pos, lev, profit, loss });
   for (const id of chats) bot.sendMessage(id, text, { parse_mode: "Markdown", reply_markup: kb }).catch(() => {});
 }
+// --- Ask-before-you-open for the PAPER books (Telegram, with size + leverage) ---
+let paperPropId = 1;
+const paperProposals = new Map();                 // id -> proposal (book, symbol, tf, dir, cost, lev, gain1, riskPct, entry, tp1, stop, ...)
+const paperProposedAt = new Map();                // "book|SYMBOL|DIR" -> ts (don't nag about the same setup)
+const PAPER_PROPOSE_COOLDOWN = 30 * 60000;
+const SIZE_PRESETS = { spot: [10, 25, 50, 100], futures: [5, 10, 25, 50] };
+const LEV_PRESETS = [5, 10, 20, 50];
+// Estimated $ profit at TP1 and $ loss at the stop, for a given size + leverage.
+function projFor(book, cost, lev, gain1, riskPct) {
+  const notional = book === "futures" ? cost * lev : cost;
+  const profit = round(notional * gain1 / 100, 2);
+  let loss = round(notional * riskPct / 100, 2);
+  if (book === "futures" && loss > cost) loss = cost;   // a futures loss can't exceed the margin (liquidation)
+  return { notional: round(notional, 2), profit, loss };
+}
+function fmtPaperPropose(p, id) {
+  const isF = p.book === "futures";
+  const dot = p.direction === "SHORT" ? "🔴" : "🟢";
+  const { notional, profit, loss } = projFor(p.book, p.cost, p.lev, p.gain1, p.riskPct);
+  const text = `${dot} *NEW ${isF ? "FUTURES" : "SPOT"} SETUP - ${p.symbol}*  ${isF ? p.lev + "x" : ""}\n`
+    + `${p.quality || ""} · ${p.confidence}% · ${TF_LABEL[p.tf] || p.tf} · ${p.direction}\n\n`
+    + `🪙 Entry ~ ${fmtUsd(p.entry)}\n`
+    + `🎯 TP1: ${fmtUsd(p.tp1)}  (+${p.gain1}%)\n`
+    + `🛑 Stop: ${fmtUsd(p.stop)}  (-${p.riskPct}%)\n\n`
+    + `*Your size:* ${isF ? `$${p.cost} margin × ${p.lev}x = $${notional} notional` : `$${p.cost}`}\n`
+    + `📈 If TP1 hits → *+$${profit}*\n`
+    + `📉 If stop hits → *-$${loss}*\n\n`
+    + `Pick a size${isF ? " / leverage" : ""}, then Confirm - or Skip.`;
+  const sizeRow = SIZE_PRESETS[p.book].map((v) => ({ text: (v === p.cost ? "• " : "") + `$${v}`, callback_data: `pc|${id}|${v}` }));
+  const rows = [sizeRow];
+  if (isF) rows.push(LEV_PRESETS.map((v) => ({ text: (v === p.lev ? "• " : "") + `${v}x`, callback_data: `pl|${id}|${v}` })));
+  rows.push([{ text: `✅ Confirm $${p.cost}${isF ? " " + p.lev + "x" : ""}`, callback_data: `pok|${id}` }, { text: "❌ Skip", callback_data: `px|${id}` }]);
+  return { text, kb: { inline_keyboard: rows } };
+}
+// Returns true if the setup was handled via Telegram (proposed or recently asked),
+// so the caller must NOT auto-open. Returns false if it couldn't ask (no bot/chat),
+// so the caller falls back to opening automatically (keeps the bot working 24/7).
+async function proposePaper(book, s, defaultCost) {
+  if (!bot || chats.size === 0) return false;
+  const dirKey = `${book}|${s.symbol}|${s.direction}`;
+  if (Date.now() - (paperProposedAt.get(dirKey) || 0) < PAPER_PROPOSE_COOLDOWN) return true; // already asked; don't re-ask or auto-open
+  paperProposedAt.set(dirKey, Date.now());
+  const lev = book === "futures" ? Math.max(1, settings.futuresLeverage) : 1;
+  const id = "P" + (paperPropId++);
+  paperProposals.set(id, { book, symbol: s.symbol, tf: s.tf, direction: s.direction, cost: round(defaultCost, 2), lev, gain1: s.targets[0].gainPct, riskPct: s.stop.riskPct, entry: s.entry.mid, tp1: s.targets[0].priceUsd, stop: s.stop.priceUsd, quality: s.quality && s.quality.tier, confidence: s.confidence, at: Date.now() });
+  const msg = fmtPaperPropose(paperProposals.get(id), id);
+  for (const chatId of chats) bot.sendMessage(chatId, msg.text, { parse_mode: "Markdown", reply_markup: msg.kb }).catch(() => {});
+  return true;
+}
+// On Confirm: re-validate the setup against the LIVE market, then open it at the
+// chosen size/leverage. Refuses if the setup has gone stale (no fake late fills).
+async function openFromProposal(p) {
+  const scan = scanCache[p.tf] && scanCache[p.tf].data;
+  let sig = scan && scan.signals.find((x) => x.symbol === p.symbol && x.direction === p.direction);
+  if (!sig) return { ok: false, reason: "the setup is no longer in the scan" };
+  const prices = await getTickerMap().catch(() => new Map());
+  const P = prices.get(p.symbol);
+  if (P != null) sig = reclassifyEntry(sig, P);
+  if (sig.entry.window !== "OPEN") return { ok: false, reason: "the setup expired (price left the entry zone)" };
+  if (p.book === "spot") {
+    if (await pstore.countOpen() >= settings.paperMaxOpen) return { ok: false, reason: "portfolio is full (max open reached)" };
+    if (await pstore.hasOpen(p.symbol)) return { ok: false, reason: "already holding it" };
+    await openPaper(sig, p.cost);
+  } else {
+    if (await fstore.countOpen() >= settings.futuresMaxOpen) return { ok: false, reason: "portfolio is full (max open reached)" };
+    if (await fstore.hasOpen(p.symbol)) return { ok: false, reason: "already holding it" };
+    await openFutures(sig, p.cost, p.lev);
+  }
+  return { ok: true };
+}
 async function maybeAlertTp1(row, upd) {
   if (!bot) return;
   const key = `${row.symbol}|${row.tf}|${row.direction}`;
@@ -2083,8 +2157,24 @@ function startTelegram() {
     // Inline Take / Skip buttons on trade proposals.
     bot.on("callback_query", async (cq) => {
       try {
-        const i = (cq.data || "").indexOf("|"); const action = cq.data.slice(0, i), key = cq.data.slice(i + 1);
-        const chatId = cq.message.chat.id, plan = proposals.get(key);
+        const parts = (cq.data || "").split("|"); const action = parts[0];
+        const chatId = cq.message.chat.id;
+        // --- Paper/futures proposal buttons: size (pc), leverage (pl), confirm (pok), skip (px) ---
+        if (action === "pc" || action === "pl" || action === "pok" || action === "px") {
+          const id = parts[1], p = paperProposals.get(id);
+          if (!p) { await bot.answerCallbackQuery(cq.id, { text: "This setup expired." }).catch(() => {}); return; }
+          if (action === "pc") { p.cost = Number(parts[2]); const m = fmtPaperPropose(p, id); await bot.editMessageText(m.text, { chat_id: chatId, message_id: cq.message.message_id, parse_mode: "Markdown", reply_markup: m.kb }).catch(() => {}); await bot.answerCallbackQuery(cq.id, { text: `Size $${p.cost}` }).catch(() => {}); return; }
+          if (action === "pl") { p.lev = Number(parts[2]); const m = fmtPaperPropose(p, id); await bot.editMessageText(m.text, { chat_id: chatId, message_id: cq.message.message_id, parse_mode: "Markdown", reply_markup: m.kb }).catch(() => {}); await bot.answerCallbackQuery(cq.id, { text: `${p.lev}x` }).catch(() => {}); return; }
+          if (action === "px") { paperProposals.delete(id); await bot.answerCallbackQuery(cq.id, { text: "Skipped" }).catch(() => {}); await bot.editMessageText(cq.message.text + "\n\n❌ SKIPPED.", { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {}); return; }
+          // pok = confirm
+          paperProposals.delete(id);
+          const { profit, loss } = projFor(p.book, p.cost, p.lev, p.gain1, p.riskPct);
+          const r = await openFromProposal(p).catch((e) => ({ ok: false, reason: e.message }));
+          if (r.ok) { await bot.answerCallbackQuery(cq.id, { text: "Trade opened ✅" }).catch(() => {}); await bot.editMessageText(cq.message.text + `\n\n✅ OPENED - $${p.cost}${p.book === "futures" ? " " + p.lev + "x" : ""}. TP1 → +$${profit}, stop → -$${loss}. I'll message you when it closes.`, { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {}); }
+          else { await bot.answerCallbackQuery(cq.id, { text: "Setup expired" }).catch(() => {}); await bot.editMessageText(cq.message.text + `\n\n⌛ NOT OPENED - ${r.reason}.`, { chat_id: chatId, message_id: cq.message.message_id }).catch(() => {}); }
+          return;
+        }
+        const key = parts.slice(1).join("|"), plan = proposals.get(key);
         if (action === "take" && plan) {
           approved.set(key, { ...plan, chatId, alerted: false, at: Date.now() });
           // Approval IS the go-ahead: place the testnet buy if keys are set (even if auto-trade is off).
@@ -2247,4 +2337,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals };
