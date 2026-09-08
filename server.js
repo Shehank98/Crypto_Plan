@@ -1054,6 +1054,9 @@ const settings = {
   momentumFilter: /^(1|true|yes|on)$/i.test(process.env.MOMENTUM_FILTER || ""),   // require a real momentum/volume push on the entry candle (skips limp, choppy setups)
   paperApproval: /^(1|true|yes|on)$/i.test(process.env.PAPER_APPROVAL || ""),     // ask on Telegram before opening each paper/futures trade (pick size + leverage, see est. profit/loss)
   patternTrades: /^(1|true|yes|on)$/i.test(process.env.PATTERN_TRADES || ""),     // also trade confirmed chart patterns (double bottom/top) on a coin's own structure, independent of BTC/regime
+  backtestGate: /^(1|true|yes|on)$/i.test(process.env.BACKTEST_GATE || ""),       // before entering, backtest the coin across timeframes and only trade its highest-win-rate timeframe (if it clears the bar)
+  backtestMinWin: Number(process.env.BACKTEST_MIN_WIN || 55),                     // required historical win % of the best timeframe
+  backtestMinTrades: Number(process.env.BACKTEST_MIN_TRADES || 10),               // need at least this many historical trades to trust the win rate
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1350,6 +1353,35 @@ function paperScore(s) {
   const velocity = gain / Math.max(0.1, etaH);                              // % gain per hour
   return velocity * (s.confidence / 100);
 }
+// --- Backtest gate: trade a coin only on its highest-win-rate timeframe ---------
+const btCache = new Map();                                                   // "BASE|tf" -> { at, res }
+async function backtestCached(base, tf) {
+  const key = `${base}|${tf}`, c = btCache.get(key);
+  if (c && Date.now() - c.at < 60 * 60000) return c.res;                     // 1-hour cache (backtests are heavy)
+  const res = await backtest(base, tf).catch(() => null);
+  btCache.set(key, { at: Date.now(), res });
+  return res;
+}
+// Across the given timeframes, find the one with the best historical win rate for
+// this coin (needs a minimum sample). This is the "best combination" the trade uses.
+async function bestTimeframe(base, tfs) {
+  let best = null;
+  for (const tf of tfs) {
+    const r = await backtestCached(base, tf);
+    if (!r || r.error || r.winRatePct == null || (r.entered || 0) < settings.backtestMinTrades) continue;
+    if (!best || r.winRatePct > best.winRatePct) best = { tf, winRatePct: r.winRatePct, trades: r.entered };
+  }
+  return best;
+}
+// Does this signal's timeframe survive the backtest gate? (best tf, clears min win)
+async function passesBacktest(base, tf, tfs) {
+  if (!settings.backtestGate) return { ok: true };
+  const best = await bestTimeframe(base, tfs);
+  if (!best) return { ok: false, why: "no backtest sample" };
+  if (best.winRatePct < settings.backtestMinWin) return { ok: false, why: `best tf ${best.tf} win ${best.winRatePct}% < ${settings.backtestMinWin}%` };
+  if (tf !== best.tf) return { ok: false, why: `${tf} isn't the best tf (${best.tf} @ ${best.winRatePct}%)` };
+  return { ok: true, best };
+}
 // Each scan: rank all eligible setups by ROI/time/accuracy and buy the BEST ones
 // that free cash + open slots allow. This is the "highest ROI in limited time" core.
 async function fillPaper(signals) {
@@ -1375,6 +1407,8 @@ async function fillPaper(signals) {
     if (P == null) continue;
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
     if (s.entry.window !== "OPEN") continue;                                 // OPEN = price is in the zone (not chasing, not past/near TP1); enter anywhere in the zone
+    const bt = await passesBacktest(s0.symbol, s0.tf, settings.paperTfs);    // only trade this coin's best-win-rate timeframe (if the gate is on)
+    if (!bt.ok) continue;
     const equity = acct.start + acct.realized;
     // Respect the $/trade you set: it's a HARD CAP even with risk-sizing on, so a
     // trade never spends more than your Position $ (still capped by available cash).
@@ -1722,6 +1756,8 @@ async function fillFutures(signals) {
     if (P == null) continue;
     const s = reclassifyEntry(s0, P);                                        // re-judge & re-price against the LIVE market
     if (s.entry.window !== "OPEN") continue;                                 // OPEN = price is in the zone (not chasing, not past/near TP1); enter anywhere in the zone
+    const bt = await passesBacktest(s0.symbol, s0.tf, settings.futuresTfs);  // only trade this coin's best-win-rate timeframe (if the gate is on)
+    if (!bt.ok) continue;
     const equity = acct.start + acct.realized;
     // Respect the margin/trade you set: hard cap even with risk-sizing on, so a
     // position never uses more margin than your Margin $ (still capped by cash).
@@ -1910,7 +1946,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, patternTrades: settings.patternTrades, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, entry: entryStatus(), trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, paperApproval: settings.paperApproval, patternTrades: settings.patternTrades, backtestGate: settings.backtestGate, backtestMinWin: settings.backtestMinWin, backtestMinTrades: settings.backtestMinTrades, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, entry: entryStatus(), trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1951,6 +1987,8 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.momentumFilter === "boolean") settings.momentumFilter = b.momentumFilter;
   if (typeof b.paperApproval === "boolean") settings.paperApproval = b.paperApproval;
   if (typeof b.patternTrades === "boolean") settings.patternTrades = b.patternTrades;
+  if (typeof b.backtestGate === "boolean") settings.backtestGate = b.backtestGate;
+  numSet("backtestMinWin", 0, 100); numSet("backtestMinTrades", 1, 500);
   numSet("dailyOpenGuardMin", 0, 120); numSet("fundingRatePct", 0, 1); numSet("killSwitchPct", 0, 100); numSet("liqBufferPct", 0, 50);
   numSet("maxHoldHours", 0, 336); numSet("fngMaxLong", 50, 100); numSet("fngMinShort", 0, 50);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
@@ -2476,4 +2514,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias, chartPattern, pivotIdx, patternOverride, detectDoubleBT, detectBreakout, detectFlag };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed, projFor, fmtPaperPropose, proposePaper, openFromProposal, paperProposals, entryStatus, nextEntryOpen, trackEligible, computeRegime, marketStance, marketBias, chartPattern, pivotIdx, patternOverride, detectDoubleBT, detectBreakout, detectFlag, bestTimeframe, passesBacktest, backtestCached };
