@@ -2128,6 +2128,38 @@ app.post("/api/futures/reset", wrap(async (_req, res) => { await fstore.reset();
 app.get("/api/futures/analytics", wrap(async (_req, res) => res.json(bookAnalytics(await fstore.all(5000), settings.futuresCapitalUsd))));
 
 app.get("/api/regime", wrap(async (_req, res) => res.json({ ...marketRegime, stance: marketStance() })));
+
+// Market scan: the best opportunities RIGHT NOW across the whole scanned universe
+// (every cached timeframe), ranked, with pattern + cached backtest win rate. Fast:
+// reads the scan cache and only shows a win rate that's already been computed.
+app.get("/api/scan", wrap(async (req, res) => {
+  const prices = await getTickerMap().catch(() => new Map());
+  const seen = new Set(), all = [];
+  for (const tf of Object.keys(scanCache)) {
+    const data = scanCache[tf] && scanCache[tf].data; if (!data) continue;
+    for (let s of data.signals) {
+      if (s.error || (s.direction !== "LONG" && s.direction !== "SHORT") || !s.entry || !s.targets) continue;
+      const p = prices.get(s.symbol); if (p != null) s = reclassifyEntry(s, p);   // live re-judge
+      all.push(s);
+    }
+  }
+  if (req.query.dir === "LONG" || req.query.dir === "SHORT") { for (let i = all.length - 1; i >= 0; i--) if (all[i].direction !== req.query.dir) all.splice(i, 1); }
+  if (req.query.window === "open") { for (let i = all.length - 1; i >= 0; i--) if (all[i].entry.window !== "OPEN") all.splice(i, 1); }
+  all.sort((a, b) => paperScore(b) - paperScore(a));
+  const limit = Math.min(80, Math.max(10, Number(req.query.limit) || 40));
+  const rows = all.slice(0, limit).map((s) => {
+    const bt = btCache.get(`${s.base}|${s.tf}`);
+    return {
+      symbol: s.symbol, tf: s.tf, direction: s.direction, confidence: s.confidence,
+      quality: s.quality && s.quality.tier, window: s.entry.window, price: s.priceUsd, entryMid: s.entry.mid,
+      tp1: s.targets[0].priceUsd, gain1: s.targets[0].gainPct, etaLabel: s.targets[0].etaLabel, riskPct: s.stop.riskPct,
+      rr: round(s.targets[0].gainPct / Math.max(0.01, s.stop.riskPct), 1), score: round(paperScore(s), 3),
+      pattern: s.chartPattern ? { name: s.chartPattern.name, bias: s.chartPattern.bias, confirmed: s.chartPattern.confirmed } : null,
+      winRatePct: bt && bt.res && !bt.res.error ? bt.res.winRatePct : null, btTrades: bt && bt.res && !bt.res.error ? bt.res.entered : null,
+    };
+  });
+  res.json({ regime: marketRegime, stance: marketStance(), scanned: all.length, universe: settings.universeSize, rows });
+}));
 app.get("/api/stats", wrap(async (_req, res) => res.json(await computeStats())));
 app.get("/api/tracked", wrap(async (_req, res) => {
   const prices = await getTickerMap().catch(() => new Map());

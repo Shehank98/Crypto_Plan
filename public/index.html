@@ -55,6 +55,17 @@
       <p id="empty" class="hidden py-16 text-center text-slate-500"></p>
     </div>
 
+    <!-- MARKET SCAN TAB -->
+    <div id="tab-market" class="hidden">
+      <div id="market-head" class="mb-3 rounded-lg border border-edge bg-panel/40 px-4 py-2 text-sm text-slate-300"></div>
+      <div class="mb-3 flex flex-wrap items-center gap-3 text-xs">
+        <div id="market-filter" class="flex overflow-hidden rounded-lg border border-edge"></div>
+        <button id="market-refresh" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-slate-300 hover:bg-edge">↻ Refresh</button>
+        <span class="text-slate-500">Best opportunities across the whole scanned market, ranked by ROI/time × conviction. Click a row to analyse.</span>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-sm" id="market-table"></table></div>
+    </div>
+
     <!-- TRACK RECORD TAB -->
     <div id="tab-track" class="hidden">
       <div id="stats" class="mb-3 flex flex-wrap gap-2"></div>

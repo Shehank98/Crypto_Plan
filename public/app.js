@@ -703,23 +703,66 @@ function drawTrackTf() {
   seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
-  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Spot Paper" }, { v: "futures", label: "⚡ Futures Paper" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "market", label: "🌐 Market Scan" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Spot Paper" }, { v: "futures", label: "⚡ Futures Paper" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
   $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     activeTab = b.dataset.tab;
     $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
+    $("tab-market").classList.toggle("hidden", activeTab !== "market");
     $("tab-track").classList.toggle("hidden", activeTab !== "track");
     $("tab-paper").classList.toggle("hidden", activeTab !== "paper");
     $("tab-futures").classList.toggle("hidden", activeTab !== "futures");
     $("tab-forex").classList.toggle("hidden", activeTab !== "forex");
     $("tab-settings").classList.toggle("hidden", activeTab !== "settings");
     drawTabs();
+    if (activeTab === "market") loadMarket();
     if (activeTab === "track") loadTrack();
     if (activeTab === "paper") loadPaper();
     if (activeTab === "futures") loadFutures();
     if (activeTab === "settings") loadSettings();
     if (activeTab === "forex") loadForex();
   }));
+}
+
+// ---------- Market scan (best opportunities across the whole market) ----------
+let marketDir = "all";     // all | LONG | SHORT
+let marketOpenOnly = false;
+async function loadMarket() {
+  const q = new URLSearchParams({ limit: "60" });
+  if (marketDir !== "all") q.set("dir", marketDir);
+  if (marketOpenOnly) q.set("window", "open");
+  let d; try { d = await api("/api/scan?" + q.toString()); } catch (e) { $("market-table").innerHTML = '<tbody><tr><td class="py-3 text-slate-500">Scan not ready yet.</td></tr></tbody>'; return; }
+  const st = d.stance;
+  $("market-head").innerHTML = `${st ? `${st.emoji} <b>${st.tier}</b> — ${st.text}<br>` : ""}<span class="text-slate-500">Scanned <b class="text-slate-300">${d.scanned}</b> live setups from the top <b class="text-slate-300">${d.universe}</b> coins · showing the top ${d.rows.length}.</span>`;
+  // filter chips
+  const chip = (v, label) => `<button data-mdir="${v}" class="px-3 py-1.5 ${marketDir === v ? "bg-indigo-600 text-white" : "bg-panel text-slate-400 hover:text-slate-200"}">${label}</button>`;
+  $("market-filter").innerHTML = chip("all", "All") + chip("LONG", "Longs") + chip("SHORT", "Shorts") + `<button id="mkt-open" class="px-3 py-1.5 ${marketOpenOnly ? "bg-emerald-700 text-white" : "bg-panel text-slate-400 hover:text-slate-200"}">Enter now</button>`;
+  $("market-filter").querySelectorAll("[data-mdir]").forEach((b) => (b.onclick = () => { marketDir = b.dataset.mdir; loadMarket(); }));
+  { const o = $("mkt-open"); if (o) o.onclick = () => { marketOpenOnly = !marketOpenOnly; loadMarket(); }; }
+  const win = { OPEN: '<span class="text-emerald-400">enter now</span>', WAIT: '<span class="text-amber-400">wait</span>', CHASE: '<span class="text-amber-400">extended</span>', CLOSED: '<span class="text-slate-500">missed</span>' };
+  if (!d.rows.length) { $("market-table").innerHTML = '<tbody><tr><td class="py-6 text-center text-slate-500">No setups match. Try All, or turn off "Enter now".</td></tr></tbody>'; return; }
+  $("market-table").innerHTML = `<thead><tr class="text-left text-xs uppercase text-slate-500">
+      <th>#</th><th>Coin</th><th>TF</th><th>Dir</th><th class="text-right">Conf</th><th>Quality</th><th>Window</th>
+      <th class="text-right">Entry</th><th class="text-right">TP1</th><th class="text-right">Gain</th><th class="text-right">R:R</th>
+      <th class="text-right">ETA</th><th>Pattern</th><th class="text-right">Win% (bt)</th></tr></thead><tbody>${d.rows.map((r, i) => `
+      <tr class="cursor-pointer border-b border-edge/60 hover:bg-edge/40" data-analyze="${r.symbol.replace(/USDT$/, "")}" data-tf="${r.tf}">
+        <td class="py-1.5 text-slate-500">${i + 1}</td>
+        <td class="py-1.5 font-semibold">${r.symbol}</td>
+        <td class="py-1.5 text-slate-400">${r.tf}</td>
+        <td class="py-1.5 ${r.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}">${r.direction}</td>
+        <td class="py-1.5 text-right tabular-nums">${r.confidence}%</td>
+        <td class="py-1.5 text-xs text-slate-400">${r.quality || "-"}</td>
+        <td class="py-1.5 text-xs">${win[r.window] || r.window}</td>
+        <td class="py-1.5 text-right tabular-nums">${usd(r.entryMid)}</td>
+        <td class="py-1.5 text-right tabular-nums text-emerald-300">${usd(r.tp1)}</td>
+        <td class="py-1.5 text-right tabular-nums text-emerald-400">+${r.gain1}%</td>
+        <td class="py-1.5 text-right tabular-nums">${r.rr}:1</td>
+        <td class="py-1.5 text-right text-xs text-slate-400">${r.etaLabel || "-"}</td>
+        <td class="py-1.5 text-xs">${r.pattern ? `<span class="${r.pattern.bias === "bull" ? "text-emerald-400" : "text-rose-400"}">${r.pattern.bias === "bull" ? "📈" : "📉"} ${r.pattern.name}${r.pattern.confirmed ? " ✓" : ""}</span>` : '<span class="text-slate-600">-</span>'}</td>
+        <td class="py-1.5 text-right tabular-nums ${r.winRatePct == null ? "text-slate-600" : r.winRatePct >= 55 ? "text-emerald-400" : "text-slate-400"}">${r.winRatePct == null ? "-" : r.winRatePct + "%"}${r.btTrades ? `<span class="text-[11px] text-slate-500"> (${r.btTrades})</span>` : ""}</td>
+      </tr>`).join("")}</tbody>`;
+  $("market-table").querySelectorAll("[data-analyze]").forEach((el) => (el.onclick = () => openAnalysis(el.dataset.analyze, el.dataset.tf)));
+  { const b = $("market-refresh"); if (b) b.onclick = loadMarket; }
 }
 
 // ---------- Settings / testnet trading ----------
