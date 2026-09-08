@@ -325,6 +325,12 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   const ps = psar(highs, lows), patterns = candlePatterns(opens, highs, lows, closes);
   const e20 = emaArray(closes, 20);
   const slope = e20.length > 6 && e20[e20.length - 6] ? (e20[e20.length - 1] - e20[e20.length - 6]) / 5 / price : 0;
+  // Momentum of the latest bar: is there a real push, or a limp/choppy candle?
+  // volSpike = last volume vs its 20-bar average; bodyRatio = |close-open|/(high-low).
+  const volAvg = sma(volumes, 20), lastVol = volumes[volumes.length - 1];
+  const volSpike = volAvg ? round(lastVol / volAvg, 2) : null;
+  const lo = lows[lows.length - 1], hi = highs[highs.length - 1], op = opens[opens.length - 1], cl = closes[closes.length - 1];
+  const bodyRatio = hi - lo > 0 ? round(Math.abs(cl - op) / (hi - lo), 2) : 0;
   const swingHigh = Math.max(...highs.slice(-20)), swingLow = Math.min(...lows.slice(-20));
 
   const up = ema200 != null && price > ema200 && ema50 > ema200;
@@ -350,6 +356,10 @@ function computeSignal(base, tf, d, fx, opts = {}) {
     if (ps) { if ((long && ps.bull) || (!long && !ps.bull)) { conf += 6; reasons.push("Parabolic SAR on trend side"); } else { conf -= 6; reasons.push("Parabolic SAR flipped against"); } }
     // CCI: dip/rally timing within the trend.
     if (cciV != null) { if (long && cciV < -100) { conf += 4; reasons.push("CCI oversold - good dip entry"); } else if (!long && cciV > 100) { conf += 4; reasons.push("CCI overbought - good rally entry"); } }
+    // Momentum/displacement: a real push (strong body + volume) with the trend adds
+    // conviction; a limp candle on thin volume is a chop warning.
+    if (bodyRatio >= 0.6 && volSpike != null && volSpike >= 1.3) { conf += 6; reasons.push(`Momentum push (body ${bodyRatio}, vol x${volSpike})`); }
+    else if (bodyRatio < 0.35 && volSpike != null && volSpike < 0.8) { conf -= 8; reasons.push("Limp candle on thin volume (chop)"); }
     // Candlestick confirmation on the latest bar.
     const patBias = patterns.find((p) => p.bias !== "neutral");
     if (patBias) { if ((long && patBias.bias === "bull") || (!long && patBias.bias === "bear")) { conf += 6; reasons.push(`${patBias.name} confirms`); } else { conf -= 4; reasons.push(`${patBias.name} against the trade`); } }
@@ -360,7 +370,7 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
 
   const obvTrend = obvArr ? (obvSlope > 0.02 ? "up" : obvSlope < -0.02 ? "down" : "flat") : null;
-  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), atrPct: a && price ? round((a / price) * 100, 2) : null, adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200) };
+  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), atrPct: a && price ? round((a / price) * 100, 2) : null, adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200), volSpike, bodyRatio };
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
@@ -747,7 +757,7 @@ function advance(t, P, now) {
       if (t.tp1_hit || upd.tp1_hit) return { ...upd, status: "WIN", result_r: 1, closed_at: nowD };
       if (belowStop) return { status: "LOSS", result_r: -1, closed_at: nowD };
       const eMs0 = t.entered_at ? new Date(t.entered_at).getTime() : created;
-      if ((now - eMs0) / 60000 > MAX_HOLD_CANDLES * tfMin) {
+      if ((now - eMs0) / 60000 > maxHoldMin(tfMin)) {
         const openR = round((long ? P - t.entry_mid : t.entry_mid - P) / Math.abs(t.entry_mid - t.stop), 2);
         return { status: "EXPIRED", result_r: openR, closed_at: nowD };
       }
@@ -767,7 +777,7 @@ function advance(t, P, now) {
       return { ...upd, status: t1 ? "WIN" : "LOSS", result_r: r, closed_at: nowD };
     }
     const enteredMs = t.entered_at ? new Date(t.entered_at).getTime() : created;
-    if ((now - enteredMs) / 60000 > MAX_HOLD_CANDLES * tfMin) {
+    if ((now - enteredMs) / 60000 > maxHoldMin(tfMin)) {
       if (t2) return { ...upd, status: "WIN", result_r: 1.25, closed_at: nowD };
       if (t1) return { ...upd, status: "WIN", result_r: 0.5, closed_at: nowD };
       const openR = round((long ? P - t.entry_mid : t.entry_mid - P) / Math.abs(t.entry_mid - t.stop), 2);
@@ -934,6 +944,11 @@ const settings = {
   killSwitchPct: Number(process.env.KILL_SWITCH_PCT || 0),                        // intraday equity drawdown % that flattens the book & locks it till next SL day (0=off)
   liqBufferPct: Number(process.env.LIQ_BUFFER_PCT || 3),                          // warn when a futures position is within this % of liquidation (0=off)
   liqAutoDerisk: /^(1|true|yes|on)$/i.test(process.env.LIQ_AUTO_DERISK || ""),    // also auto-close a position that breaches the liq buffer
+  maxHoldHours: Number(process.env.MAX_HOLD_HOURS || 48),                         // absolute cap on how long ANY paper/track trade stays open (stops "3-day" trades); 0=off
+  fngFilter: /^(1|true|yes|on)$/i.test(process.env.FNG_FILTER || ""),             // use the Fear & Greed index to avoid buying tops / shorting bottoms
+  fngMaxLong: Number(process.env.FNG_MAX_LONG || 80),                             // block new LONGs when Fear & Greed >= this (extreme greed)
+  fngMinShort: Number(process.env.FNG_MIN_SHORT || 20),                           // block new SHORTs when Fear & Greed <= this (extreme fear)
+  momentumFilter: /^(1|true|yes|on)$/i.test(process.env.MOMENTUM_FILTER || ""),   // require a real momentum/volume push on the entry candle (skips limp, choppy setups)
 };
 let lastTnError = null; // most recent testnet error, surfaced in the UI
 const tnConfigured = () => !!(settings.apiKey && settings.apiSecret);
@@ -1216,6 +1231,7 @@ function paperEligible(s) {
   if (s.entry.window !== "OPEN") return false;                              // enter ONLY when price is in the zone (same trigger as the Track Record), not while WAITing
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
   if (!s.quality || s.quality.score < 3) return false;                       // good coins only (Blue-chip / Solid)
+  if (!momentumOk(s)) return false;                                          // needs a real push on the entry candle (if the filter is on)
   const eta = s.targets[0].etaMin;
   if (settings.paperMaxEtaMin > 0 && eta != null && eta > settings.paperMaxEtaMin) return false; // limited time
   return true;
@@ -1235,6 +1251,7 @@ async function fillPaper(signals) {
   if (!settings.paperTrading) return;
   if (killSwitchLocked("spot")) return;                                      // book flattened & locked for the day
   if (!entryGate().allow) return;                                            // session / weekend / daily-open guard
+  if (fngBlocks("LONG")) return;                                             // extreme greed - don't buy the top
   if (settings.regimeFilter && marketRegime.tier === "RISK_OFF") return;     // don't buy into a risk-off market
   if (dailyHalted((await paperDaily()).net, settings.capitalUsd)) return;    // daily loss circuit breaker
   const prices = await getTickerMap().catch(() => new Map());               // the CURRENT market, not the scan snapshot
@@ -1347,6 +1364,42 @@ function killSwitchState(book, equity, floor = 0, now = Date.now()) {
   return { ddPct: round(ddPct, 2), locked: g.locked, triggered: !!g.triggered, peak: round(g.peak, 2) };
 }
 function killSwitchLocked(book) { const g = bookGuard[book]; return g.day === slDateStr(Date.now()) && g.locked; }
+
+// Absolute hold cap: MAX_HOLD candles OR maxHoldHours, whichever is SHORTER, so a
+// higher-timeframe trade can't sit open for days (a 4h trade at 60 candles = 10 days).
+function maxHoldMin(tfMin) {
+  const byCandles = MAX_HOLD_CANDLES * tfMin;
+  return settings.maxHoldHours > 0 ? Math.min(byCandles, settings.maxHoldHours * 60) : byCandles;
+}
+
+// --- Fear & Greed sentiment (free Alternative.me API; never blocks on failure) --
+let fearGreed = { value: null, cls: null, at: 0 };
+async function refreshFearGreed() {
+  if (fearGreed.value != null && Date.now() - fearGreed.at < 30 * 60000) return fearGreed; // 30-min cache
+  try {
+    const r = await http.get("https://api.alternative.me/fng/", { params: { limit: 1 }, timeout: 8000 });
+    const d = r.data && r.data.data && r.data.data[0];
+    if (d && Number.isFinite(Number(d.value))) fearGreed = { value: Number(d.value), cls: d.value_classification, at: Date.now() };
+  } catch (e) { /* non-fatal - a sentiment hiccup must never block trading */ }
+  return fearGreed;
+}
+// Block a NEW long at extreme greed, a new short at extreme fear (buying tops /
+// shorting bottoms is where the ugly losses come from).
+function fngBlocks(direction) {
+  if (!settings.fngFilter || fearGreed.value == null) return false;
+  if (direction === "LONG" && fearGreed.value >= settings.fngMaxLong) return true;
+  if (direction === "SHORT" && fearGreed.value <= settings.fngMinShort) return true;
+  return false;
+}
+// Momentum gate: only take a setup with a real push on the entry candle - a clear
+// volume spike OR a strong-bodied displacement candle. Skips the limp, choppy fills.
+function momentumOk(s) {
+  if (!settings.momentumFilter) return true;
+  const vs = s.indicators && s.indicators.volSpike, br = s.indicators && s.indicators.bodyRatio;
+  if (vs != null && vs >= 1.2) return true;
+  if (br != null && br >= 0.5) return true;
+  return false;
+}
 // Sum the net unrealized P/L of the open positions at the live prices.
 function openUnrealized(open, prices, kind) {
   let u = 0;
@@ -1427,7 +1480,7 @@ async function managePaper(prices) {
     // in a dead one. It closes at the live price (whatever the P/L is at that point).
     const tfMin = TF_MINUTES[t.tf] || 60;
     const heldMin = t.opened_at ? (now - new Date(t.opened_at).getTime()) / 60000 : 0;
-    const timeUp = heldMin > MAX_HOLD_CANDLES * tfMin;
+    const timeUp = heldMin > maxHoldMin(tfMin);
     if (!hitTp && !hitStop && !timeUp) continue;
     // Fills: TP exits at the limit (conservative). A stop that GAPPED through fills at
     // the live price (worse), never better than the market - so losses are never
@@ -1492,6 +1545,7 @@ function futuresEligible(s) {
   if (s.entry.window !== "OPEN") return false;                              // enter only when price is in the zone (same trigger as the Track Record)
   if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) return false;
   if (!s.quality || s.quality.score < 3) return false;
+  if (!momentumOk(s)) return false;                                          // needs a real push on the entry candle (if the filter is on)
   // LIQUIDATION SAFETY: at high leverage the ATR stop is often WIDER than the
   // liquidation distance (~100/leverage %), so the trade wipes the whole margin
   // before the stop. Skip those - only take setups whose stop sits safely inside
@@ -1513,6 +1567,7 @@ async function fillFutures(signals) {
     if (await fstore.countOpen() >= settings.futuresMaxOpen) break;
     const acct = await futuresAccount();
     if (acct.cash < 1) break;
+    if (fngBlocks(s0.direction)) continue;                                   // extreme greed on a long / extreme fear on a short
     if (settings.regimeFilter && marketRegime.tier === "RISK_OFF" && s0.direction === "LONG") continue; // trade with the trend
     if (settings.regimeFilter && marketRegime.tier === "RISK_ON" && s0.direction === "SHORT") continue;
     const open = await fstore.openTrades();
@@ -1587,7 +1642,7 @@ async function manageFutures(prices) {
     // Time stop: free the margin after MAX_HOLD candles so it can rotate.
     const tfMin = TF_MINUTES[t.tf] || 60;
     const heldMin = t.opened_at ? (now - new Date(t.opened_at).getTime()) / 60000 : 0;
-    const timeUp = heldMin > MAX_HOLD_CANDLES * tfMin;
+    const timeUp = heldMin > maxHoldMin(tfMin);
     if (!hitTp && !hitStop && !liquidated && !timeUp && !derisk) continue;
     // Fills: TP at the limit; a stop that gapped through fills at the live price
     // (worse), never better; liquidation = margin gone; time / de-risk exit at live.
@@ -1707,7 +1762,7 @@ app.get("/api/backtest/:symbol", wrap(async (req, res) => {
 }));
 
 // --- Settings & Binance Spot Testnet trading ---
-const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
+const settingsView = () => ({ configured: tnConfigured(), keyMasked: maskKey(settings.apiKey), autoTrade: settings.autoTrade, tradeUsd: settings.tradeUsd, qualityOnly: settings.qualityOnly, holdThroughDips: settings.holdThroughDips, regimeFilter: settings.regimeFilter, exitStyle: settings.exitStyle, minTrackLiquidityUsd: settings.minTrackLiquidityUsd, tgApproval: settings.tgApproval, positionUsd: settings.positionUsd, leverage: settings.leverage, capitalUsd: settings.capitalUsd, telegramReady: !!bot && chats.size > 0, telegramTokenSet: !!process.env.TELEGRAM_BOT_TOKEN, telegramBotOn: !!bot, telegramChats: chats.size, paperTrading: settings.paperTrading, paperMaxOpen: settings.paperMaxOpen, paperPositionUsd: settings.paperPositionUsd, paperGoalUsd: settings.paperGoalUsd, paperMaxEtaMin: settings.paperMaxEtaMin, riskSizing: settings.riskSizing, baseRiskPct: settings.baseRiskPct, maxRiskPct: settings.maxRiskPct, maxPositionPct: settings.maxPositionPct, maxDailyLossPct: settings.maxDailyLossPct, maxSameDir: settings.maxSameDir, feePctSpot: settings.feePctSpot, feePctFutures: settings.feePctFutures, slippagePct: settings.slippagePct, sessionFilter: settings.sessionFilter, weekendGuard: settings.weekendGuard, dailyOpenGuardMin: settings.dailyOpenGuardMin, fundingRatePct: settings.fundingRatePct, killSwitchPct: settings.killSwitchPct, liqBufferPct: settings.liqBufferPct, liqAutoDerisk: settings.liqAutoDerisk, maxHoldHours: settings.maxHoldHours, fngFilter: settings.fngFilter, fngMaxLong: settings.fngMaxLong, fngMinShort: settings.fngMinShort, momentumFilter: settings.momentumFilter, fearGreed: fearGreed.value != null ? { value: fearGreed.value, cls: fearGreed.cls } : null, session: sessionInfo().session, entryAllowed: entryGate().allow, entryBlockReason: entryGate().reason, trackMinConfidence: TRACK_MIN_CONFIDENCE, quote: QUOTE, testnetBase: settings.testnetBase, proxySet: !!settings.proxyUrl, proxyTestnet: settings.proxyTestnet, lastError: lastTnError, durableSettings: useDb });
 app.get("/api/settings", wrap(async (_req, res) => res.json(settingsView())));
 app.post("/api/settings", wrap(async (req, res) => {
   const b = req.body || {};
@@ -1744,7 +1799,10 @@ app.post("/api/settings", wrap(async (req, res) => {
   if (typeof b.sessionFilter === "boolean") settings.sessionFilter = b.sessionFilter;
   if (typeof b.weekendGuard === "boolean") settings.weekendGuard = b.weekendGuard;
   if (typeof b.liqAutoDerisk === "boolean") settings.liqAutoDerisk = b.liqAutoDerisk;
+  if (typeof b.fngFilter === "boolean") settings.fngFilter = b.fngFilter;
+  if (typeof b.momentumFilter === "boolean") settings.momentumFilter = b.momentumFilter;
   numSet("dailyOpenGuardMin", 0, 120); numSet("fundingRatePct", 0, 1); numSet("killSwitchPct", 0, 100); numSet("liqBufferPct", 0, 50);
+  numSet("maxHoldHours", 0, 336); numSet("fngMaxLong", 50, 100); numSet("fngMinShort", 0, 50);
   if (typeof b.futuresTrading === "boolean") settings.futuresTrading = b.futuresTrading;
   if (b.futuresCapitalUsd != null && Number.isFinite(+b.futuresCapitalUsd)) settings.futuresCapitalUsd = Math.max(1, +b.futuresCapitalUsd);
   if (b.futuresMarginUsd != null && Number.isFinite(+b.futuresMarginUsd)) settings.futuresMarginUsd = Math.max(1, +b.futuresMarginUsd);
@@ -2129,6 +2187,7 @@ async function indicatorTick() {
   try {
     // Scan every timeframe in use PLUS the ones the paper/futures books trade,
     // so those books always have fresh signals (even if you never open that tab).
+    if (settings.fngFilter) await refreshFearGreed();                        // keep sentiment fresh for the entry gate
     const tfs = [...new Set([...currentTfs(), ...settings.paperTfs, ...settings.futuresTfs].filter((t) => TF_MINUTES[t]))];
     for (const tf of tfs) {
       const data = await scanMarket(tf, true);
@@ -2182,4 +2241,4 @@ async function boot() {
 if (require.main === module) boot();
 
 module.exports = app;
-module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized };
+module.exports._test = { ema, sma, rsi, macd, bollinger, atr, vwap, mfi, adx, stochRsi, cci, williamsR, obv, psar, candlePatterns, computeSignal, humanizeEta, advance, backtest, fmtSignalCard, fmtSignalRow, fmtPaperBuy, fmtPaperSell, openPaper, managePaper, paperAccount, paperDaily, paperScore, paperEligible, fillPaper, pstore, openFutures, manageFutures, futuresAccount, futuresDaily, futuresEligible, fillFutures, fstore, settings, sessionInfo, entryGate, fundingCost, fundingWindowsCrossed, killSwitchState, runKillSwitch, bookGuard, openUnrealized, maxHoldMin, fngBlocks, momentumOk, refreshFearGreed };
