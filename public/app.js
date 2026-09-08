@@ -220,6 +220,29 @@ function fmtDur(min) {
   if (min < 1440) return `${(min / 60).toFixed(1)}h`;
   return `${(min / 1440).toFixed(1)}d`;
 }
+// "3h 12m" from minutes
+function fmtHM(min) {
+  if (!Number.isFinite(min) || min <= 0) return "now";
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return (h ? h + "h " : "") + m + "m";
+}
+// Banner on the paper/futures tabs: are new entries open, why not, countdown.
+function renderEntryBanner(elId, p) {
+  const el = $(elId); if (!el) return;
+  const e = p && p.entry;
+  if (!e) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.className = "mb-4 rounded-lg border px-4 py-2 text-sm";
+  if (e.allowed) {
+    const extra = p.approval ? " · asking you on Telegram before each trade" : "";
+    el.style.cssText = "border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.12);color:#6ee7b7";
+    el.innerHTML = `✅ <b>New entries open</b> · ${e.session} session${extra}`;
+  } else {
+    const when = e.nextOpenInMin != null ? ` · opens in <b>${fmtHM(e.nextOpenInMin)}</b>${e.nextOpenSL ? ` (${e.nextOpenSL})` : ""}` : "";
+    el.style.cssText = "border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.12);color:#fcd34d";
+    el.innerHTML = `⏸ <b>New entries paused</b> — ${e.reason || e.session + " session"}${when}. Open trades are still managed.`;
+  }
+}
 // Minutes between two ISO timestamps.
 function minsBetween(a, b) { if (!a || !b) return null; const m = (new Date(b).getTime() - new Date(a).getTime()) / 60000; return Number.isFinite(m) ? m : null; }
 // Projected clock time (SL) that TP1 is estimated to hit: entered + eta minutes.
@@ -882,6 +905,7 @@ function readTfChips(containerId) {
 async function loadPaper() {
   let p;
   try { p = await api("/api/paper/trades"); } catch (e) { return; }
+  renderEntryBanner("paper-entry", p);
   if ($("paper-on")) $("paper-on").checked = !!p.enabled;
   if ($("paper-max")) $("paper-max").value = p.maxOpen;
   if ($("paper-pos")) $("paper-pos").value = p.positionUsd;
@@ -940,6 +964,7 @@ async function resetPaper() {
 // ---------- Futures paper (leveraged) ----------
 async function loadFutures() {
   let p; try { p = await api("/api/futures/trades"); } catch (e) { return; }
+  renderEntryBanner("fut-entry", p);
   if ($("fut-on")) $("fut-on").checked = !!p.enabled;
   if ($("fut-cap") && p.startUsd != null) $("fut-cap").value = p.startUsd;
   if ($("fut-margin") && p.marginPerTrade != null) $("fut-margin").value = p.marginPerTrade;
