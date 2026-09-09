@@ -67,6 +67,18 @@
       <div class="overflow-x-auto"><table class="w-full text-sm" id="market-table"></table></div>
     </div>
 
+    <!-- DIP BUY TAB -->
+    <div id="tab-dips" class="hidden">
+      <div class="mb-3 rounded-lg border border-edge bg-panel/40 px-4 py-2 text-sm text-slate-300">
+        <b>🩸 Dip finder for DCA.</b> Good-quality coins that have pulled back from their recent high or gone oversold - the spots to accumulate. <span class="text-slate-500">"In uptrend" = a healthy dip above the 200-EMA; "deep value" = below it (bigger discount, higher risk). This is a finder, not auto-trading - DCA in your own size.</span>
+      </div>
+      <div class="mb-3 flex flex-wrap items-center gap-3 text-xs">
+        <button id="dips-refresh" class="rounded-lg border border-edge bg-panel px-3 py-1.5 text-slate-300 hover:bg-edge">↻ Refresh</button>
+        <span id="dips-status" class="text-xs"></span>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-sm" id="dips-table"></table></div>
+    </div>
+
     <!-- TRACK RECORD TAB -->
     <div id="tab-track" class="hidden">
       <div id="stats" class="mb-3 flex flex-wrap gap-2"></div>
@@ -392,6 +404,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260908d"></script>
+  <script src="/app.js?v=20260909a"></script>
 </body>
 </html>

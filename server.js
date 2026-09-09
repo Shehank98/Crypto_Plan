@@ -404,6 +404,9 @@ function computeSignal(base, tf, d, fx, opts = {}) {
 
   const up = ema200 != null && price > ema200 && ema50 > ema200;
   const down = ema200 != null && price < ema200 && ema50 < ema200;
+  // Dip metrics for DCA: how far price has pulled back from its recent high.
+  const hi30 = Math.max(...highs.slice(-30)), pctFromHigh = hi30 > 0 ? round((hi30 - price) / hi30 * 100, 1) : 0;
+  const belowEma200Pct = ema200 ? round((ema200 - price) / ema200 * 100, 1) : null;   // + = below the 200 EMA
   const cpat = chartPattern(highs, lows, closes);   // double bottom / double top structure
   let direction = up ? "LONG" : down ? "SHORT" : "NEUTRAL";
   let reversal = false;
@@ -451,7 +454,7 @@ function computeSignal(base, tf, d, fx, opts = {}) {
   if (conf < MIN_CONFIDENCE) direction = "NEUTRAL";
 
   const obvTrend = obvArr ? (obvSlope > 0.02 ? "up" : obvSlope < -0.02 ? "down" : "flat") : null;
-  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), atrPct: a && price ? round((a / price) * 100, 2) : null, adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200), volSpike, bodyRatio };
+  const indicators = { price: rp(price), rsi14: round(r, 1), macdHist: rp(mac ? mac.hist : null), bollingerPctB: boll ? round(boll.pctB, 3) : null, vwap: rp(vw), mfi: round(mf, 1), atr: rp(a), atrPct: a && price ? round((a / price) * 100, 2) : null, adx: round(adxV, 1), stochRsi: round(srsi, 2), cci: round(cciV, 1), williamsR: round(wr, 1), obvTrend, psar: ps ? (ps.bull ? "bull" : "bear") : null, ema20: rp(ema20), ema50: rp(ema50), ema200: rp(ema200), volSpike, bodyRatio, pctFromHigh, belowEma200Pct };
   const H = 24, drift = Math.max(-0.02, Math.min(0.02, slope)), predicted = price * (1 + drift * H), bandFrac = a ? (a * Math.sqrt(H)) / price : 0.05;
   const forecast = { horizon: humanizeEta(H * (TF_MINUTES[tf] || 60)), priceUsd: rp(predicted), lowUsd: rp(predicted * (1 - bandFrac)), highUsd: rp(predicted * (1 + bandFrac)) };
 
@@ -2186,6 +2189,46 @@ app.get("/api/scan", wrap(async (req, res) => {
     };
   });
   res.json({ regime: marketRegime, stance: marketStance(), scanned: all.length, universe: settings.universeSize, rows });
+}));
+
+// Dip-buy scanner (for DCA): quality coins that have pulled back / gone oversold,
+// so you can accumulate. Not a trend signal - it ranks how good a DIP each coin is.
+function dipRating(rsi, fromHigh) {
+  if (rsi != null && rsi <= 30 && fromHigh >= 15) return { tier: "Strong dip", rank: 3 };
+  if (rsi != null && rsi <= 40 && fromHigh >= 8) return { tier: "Good dip", rank: 2 };
+  if (fromHigh >= 5 || (rsi != null && rsi <= 45)) return { tier: "Mild dip", rank: 1 };
+  return { tier: "-", rank: 0 };
+}
+app.get("/api/dips", wrap(async (req, res) => {
+  const prices = await getTickerMap().catch(() => new Map());
+  const best = new Map();                                                    // one row per coin (prefer higher timeframe read)
+  const tfRank = { "1d": 3, "4h": 2, "1h": 1, "15m": 0 };
+  for (const tf of Object.keys(scanCache)) {
+    const data = scanCache[tf] && scanCache[tf].data; if (!data) continue;
+    for (const s of data.signals) {
+      if (s.error || !s.indicators || !s.quality) continue;
+      if (s.quality.score < 3) continue;                                     // DCA into good coins only
+      if (s.liquidityUsd != null && s.liquidityUsd < settings.minTrackLiquidityUsd) continue;
+      const prev = best.get(s.symbol);
+      if (!prev || (tfRank[s.tf] || 0) > (tfRank[prev.tf] || 0)) best.set(s.symbol, s);
+    }
+  }
+  const rows = [];
+  for (const s of best.values()) {
+    const ind = s.indicators, price = prices.get(s.symbol) ?? s.priceUsd;
+    const fromHigh = ind.pctFromHigh != null ? ind.pctFromHigh : 0;
+    const rsi = ind.rsi14, r = dipRating(rsi, fromHigh);
+    if (r.rank === 0) continue;                                              // only actual dips
+    rows.push({
+      symbol: s.symbol, tf: s.tf, quality: s.quality.tier, price: rp(price), changePct: s.changePct,
+      fromHighPct: fromHigh, rsi, belowEma200Pct: ind.belowEma200Pct,
+      trend: ind.belowEma200Pct != null && ind.belowEma200Pct <= 0 ? "uptrend (dip)" : "below 200EMA (deep value)",
+      rating: r.tier, rank: r.rank,
+    });
+  }
+  // Rank: strongest dip tier first, then deepest pullback, then most oversold.
+  rows.sort((a, b) => b.rank - a.rank || b.fromHighPct - a.fromHighPct || (a.rsi ?? 99) - (b.rsi ?? 99));
+  res.json({ count: rows.length, rows: rows.slice(0, 60) });
 }));
 
 // Quote for the trade dialog: the setup's levels + how much cash the book has, so

@@ -703,12 +703,13 @@ function drawTrackTf() {
   seg($("track-tf"), [{ v: "all", label: "All TF" }, ...(CONFIG.timeframes || ["15m", "1h", "4h", "1d"]).map((t) => ({ v: t, label: t }))], trackTf, (v) => { trackTf = v; drawTrackTf(); renderTrackedFiltered(); });
 }
 function drawTabs() {
-  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "market", label: "🌐 Market Scan" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Spot Paper" }, { v: "futures", label: "⚡ Futures Paper" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
+  const tabs = [{ v: "signals", label: "📡 Signals" }, { v: "market", label: "🌐 Market Scan" }, { v: "dips", label: "🩸 Dip Buy" }, { v: "track", label: "🎯 Track Record" }, { v: "paper", label: "📝 Spot Paper" }, { v: "futures", label: "⚡ Futures Paper" }, { v: "forex", label: "💱 Forex Bot" }, { v: "settings", label: "⚙️ Settings" }];
   $("tabs").innerHTML = tabs.map((t) => `<button data-tab="${t.v}" class="-mb-px border-b-2 px-4 py-2 ${t.v === activeTab ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}">${t.label}</button>`).join("");
   $("tabs").querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     activeTab = b.dataset.tab;
     $("tab-signals").classList.toggle("hidden", activeTab !== "signals");
     $("tab-market").classList.toggle("hidden", activeTab !== "market");
+    $("tab-dips").classList.toggle("hidden", activeTab !== "dips");
     $("tab-track").classList.toggle("hidden", activeTab !== "track");
     $("tab-paper").classList.toggle("hidden", activeTab !== "paper");
     $("tab-futures").classList.toggle("hidden", activeTab !== "futures");
@@ -716,6 +717,7 @@ function drawTabs() {
     $("tab-settings").classList.toggle("hidden", activeTab !== "settings");
     drawTabs();
     if (activeTab === "market") loadMarket();
+    if (activeTab === "dips") loadDips();
     if (activeTab === "track") loadTrack();
     if (activeTab === "paper") loadPaper();
     if (activeTab === "futures") loadFutures();
@@ -838,6 +840,33 @@ function bindCloseButtons(containerId) {
       if (path === "futures") loadFutures(); else loadPaper();
     } catch (e) { b.disabled = false; b.textContent = "Close"; alert("Close failed: " + e.message); }
   }));
+}
+
+// ---------- Dip Buy (DCA finder) ----------
+async function loadDips() {
+  let d; try { d = await api("/api/dips"); } catch (e) { $("dips-table").innerHTML = '<tbody><tr><td class="py-3 text-slate-500">Scan not ready yet.</td></tr></tbody>'; return; }
+  $("dips-status").innerHTML = `<span class="text-slate-500">${d.count} dip${d.count === 1 ? "" : "s"} found across quality coins.</span>`;
+  const ratingColor = (t) => t === "Strong dip" ? "text-emerald-400" : t === "Good dip" ? "text-emerald-300" : "text-amber-300";
+  if (!d.rows.length) { $("dips-table").innerHTML = '<tbody><tr><td class="py-6 text-center text-slate-500">No dips right now - quality coins are near their highs. Check back later.</td></tr></tbody>'; return; }
+  $("dips-table").innerHTML = `<thead><tr class="text-left text-xs uppercase text-slate-500">
+      <th>#</th><th>Coin</th><th>TF</th><th>Quality</th><th class="text-right">Price</th><th class="text-right">24h</th>
+      <th class="text-right">From high</th><th class="text-right">RSI</th><th>Trend</th><th>Dip</th><th>DCA</th></tr></thead><tbody>${d.rows.map((r, i) => `
+      <tr class="cursor-pointer border-b border-edge/60 hover:bg-edge/40" data-analyze="${r.symbol}" data-tf="${r.tf}">
+        <td class="py-1.5 text-slate-500">${i + 1}</td>
+        <td class="py-1.5 font-semibold">${r.symbol}</td>
+        <td class="py-1.5 text-slate-400">${r.tf}</td>
+        <td class="py-1.5 text-xs text-slate-400">${r.quality || "-"}</td>
+        <td class="py-1.5 text-right tabular-nums">${usd(r.price)}</td>
+        <td class="py-1.5 text-right tabular-nums ${r.changePct == null ? "text-slate-500" : r.changePct >= 0 ? "text-emerald-400" : "text-rose-400"}">${r.changePct == null ? "-" : (r.changePct >= 0 ? "+" : "") + r.changePct + "%"}</td>
+        <td class="py-1.5 text-right tabular-nums text-rose-300">-${r.fromHighPct}%</td>
+        <td class="py-1.5 text-right tabular-nums ${r.rsi != null && r.rsi <= 35 ? "text-emerald-400" : "text-slate-300"}">${r.rsi ?? "-"}</td>
+        <td class="py-1.5 text-xs ${r.trend.startsWith("uptrend") ? "text-emerald-400" : "text-amber-400"}">${r.trend}</td>
+        <td class="py-1.5 text-xs font-semibold ${ratingColor(r.rating)}">${r.rating}</td>
+        <td class="py-1.5"><button data-trade="spot" data-sym="${r.symbol}" data-tf="${r.tf}" class="rounded border border-emerald-700/60 px-2 py-0.5 text-xs text-emerald-300 hover:bg-emerald-900/30">Buy</button></td>
+      </tr>`).join("")}</tbody>`;
+  $("dips-table").querySelectorAll("[data-analyze]").forEach((el) => (el.onclick = () => openAnalysis(el.dataset.analyze, el.dataset.tf)));
+  $("dips-table").querySelectorAll("[data-trade]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); openTradeDialog(b.dataset.sym, b.dataset.tf, b.dataset.trade); }));
+  { const b = $("dips-refresh"); if (b) b.onclick = loadDips; }
 }
 
 // ---------- Settings / testnet trading ----------
